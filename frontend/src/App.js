@@ -322,9 +322,9 @@ const SlideshowPage = () => {
       </div>
 
       {/* Main Slideshow Area */}
-      <div className="flex-1 relative flex flex-col h-full overflow-hidden bg-[#0A0A0A]">
+      <div className="flex-1 flex flex-col h-full overflow-hidden">
         {/* Progress Bar */}
-        <div className="h-1 bg-[#0A0A0A] w-full z-10 relative">
+        <div className="h-1 bg-[#E5E5E5] w-full flex-shrink-0">
           <div
             className="h-full bg-[#002FA7] progress-bar"
             style={{ width: `${progressPercent}%` }}
@@ -332,11 +332,10 @@ const SlideshowPage = () => {
           ></div>
         </div>
 
-        {/* Image Container */}
-        <div className="flex-1 relative slideshow-container" data-testid="slideshow-container">
+        {/* Image Container - takes all remaining space */}
+        <div className="flex-1 relative bg-[#0A0A0A] min-h-0" data-testid="slideshow-container">
           {currentSlide && (
             <>
-              {/* Background Image */}
               {!imageError ? (
                 <img
                   key={currentSlide.id + '-' + currentIndex}
@@ -351,38 +350,36 @@ const SlideshowPage = () => {
                   <ImageIcon className="w-16 h-16 text-[#E5E5E5]" />
                 </div>
               )}
-
-              {/* Folder Name Overlay - compact bottom bar */}
-              <div className="absolute bottom-16 left-0 right-0 z-10">
-                <div className="bg-[#0A0A0A]/75 backdrop-blur-sm px-4 py-2 mx-auto w-fit max-w-[80%]">
-                  <p
-                    className="text-sm font-body font-medium text-white text-center truncate"
-                    data-testid="folder-name-overlay"
-                    style={{ fontSize: '14px' }}
-                  >
-                    {currentSlide.folderName || currentSlide.parent_folder || currentSlide.name}
-                    {currentSlide.type === 'image' && (
-                      <span className="text-white/60 ml-2">{currentSlide.name}</span>
-                    )}
-                  </p>
-                </div>
-              </div>
             </>
           )}
         </div>
 
-        {/* Controls */}
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20">
-          <div
-            className="bg-white/80 backdrop-blur-xl border border-[#E5E5E5] px-6 py-3 flex items-center gap-5"
-            data-testid="slideshow-controls"
-          >
+        {/* Bottom Bar: Folder Name + Controls (outside the image) */}
+        <div className="flex-shrink-0 bg-[#0A0A0A] border-t border-[#222] flex items-center justify-between px-4 py-2" data-testid="slideshow-controls">
+          {/* Folder Name */}
+          <div className="flex-1 min-w-0 mr-4">
+            <p
+              className="font-body font-medium text-white truncate"
+              data-testid="folder-name-overlay"
+              style={{ fontSize: '14px' }}
+            >
+              {currentSlide?.folderName || currentSlide?.parent_folder || currentSlide?.name || ''}
+            </p>
+            {currentSlide?.type === 'image' && (
+              <p className="font-body text-white/50 truncate" style={{ fontSize: '12px' }}>
+                {currentSlide.name}
+              </p>
+            )}
+          </div>
+
+          {/* Navigation Controls */}
+          <div className="flex items-center gap-3 flex-shrink-0">
             <Button
               data-testid="previous-button"
               onClick={handlePrevious}
               variant="ghost"
               size="icon"
-              className="rounded-sm hover:bg-[#F2F2F2] h-9 w-9"
+              className="rounded-sm hover:bg-white/10 h-8 w-8 text-white"
             >
               <CaretLeft className="w-5 h-5" weight="bold" />
             </Button>
@@ -392,7 +389,7 @@ const SlideshowPage = () => {
               onClick={() => setIsPlaying(!isPlaying)}
               variant="ghost"
               size="icon"
-              className="rounded-sm hover:bg-[#F2F2F2] h-9 w-9"
+              className="rounded-sm hover:bg-white/10 h-8 w-8 text-white"
             >
               {isPlaying ? (
                 <Pause className="w-5 h-5" weight="fill" />
@@ -406,14 +403,14 @@ const SlideshowPage = () => {
               onClick={handleNext}
               variant="ghost"
               size="icon"
-              className="rounded-sm hover:bg-[#F2F2F2] h-9 w-9"
+              className="rounded-sm hover:bg-white/10 h-8 w-8 text-white"
             >
               <CaretRight className="w-5 h-5" weight="bold" />
             </Button>
 
-            <div className="h-5 w-px bg-[#E5E5E5]"></div>
+            <div className="h-4 w-px bg-white/20"></div>
 
-            <div className="text-sm font-body text-[#0A0A0A] font-medium tabular-nums" data-testid="slide-counter">
+            <div className="text-xs font-body text-white/70 font-medium tabular-nums" data-testid="slide-counter">
               {currentIndex + 1} / {allItems.length}
             </div>
           </div>

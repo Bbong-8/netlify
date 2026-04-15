@@ -326,6 +326,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Serve frontend static files (for combined deployment on Render/Plesk)
+frontend_build = ROOT_DIR.parent / "frontend" / "build"
+if frontend_build.exists():
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.responses import FileResponse
+
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        """Serve React frontend - catch-all for non-API routes."""
+        file_path = frontend_build / full_path
+        if file_path.is_file():
+            return FileResponse(file_path)
+        return FileResponse(frontend_build / "index.html")
+
+    app.mount("/static", StaticFiles(directory=str(frontend_build / "static")), name="static")
+
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()

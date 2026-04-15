@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import '@/App.css';
-import { Play, Pause, CaretLeft, CaretRight, Folder, FolderOpen, ArrowLeft, Spinner } from '@phosphor-icons/react';
+import { Play, Pause, CaretLeft, CaretRight, Folder, FolderOpen, ArrowLeft, Spinner, ArrowClockwise } from '@phosphor-icons/react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -22,12 +22,13 @@ function LandingPage() {
     try {
       setLoading(true);
       toast.info('Scanning folder structure...');
-      const res = await axios.post(`${API}/drive/folder`, { drive_link: driveLink });
+      const res = await axios.post(`${API}/drive/folder`, { drive_link: driveLink }, { timeout: 300000 });
       localStorage.setItem('folder_data', JSON.stringify(res.data));
+      localStorage.setItem('drive_link', driveLink);
       toast.success(`Found ${res.data.total_images} images in ${res.data.total_folders} folders!`);
       navigate('/slideshow');
     } catch (err) {
-      toast.error(err.response?.data?.detail || "Failed to access folder.");
+      toast.error(err.response?.data?.detail || "Failed to access folder. Try again.");
     } finally { setLoading(false); }
   };
 
@@ -63,16 +64,10 @@ function SlideshowPage() {
   const [imgIdx, setImgIdx] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [imgErr, setImgErr] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const timerRef = useRef(null);
 
-  // Build folder list from flat items
-  useEffect(() => {
-    const raw = localStorage.getItem('folder_data');
-    if (!raw) { navigate('/'); return; }
-    const data = JSON.parse(raw);
-    setFolderData(data);
-
-    // Build a map of folder path -> images
+  const buildFolders = (data) => {
     const folderMap = {};
     const folderOrder = [];
 
@@ -94,11 +89,7 @@ function SlideshowPage() {
       }
     });
 
-    // Keep only folders that have images (directly or via sub)
-    // Also compute total images including sub-folders
     const folderList = folderOrder.map(p => folderMap[p]).filter(Boolean);
-
-    // For each top-level folder, gather all images from sub-folders too
     const topLevel = folderList.filter(f => f.depth === 0);
     const enriched = topLevel.map(top => {
       const allImages = [];
@@ -109,7 +100,16 @@ function SlideshowPage() {
       });
       return { ...top, allImages, subfolders: folderList.filter(f => f.path.startsWith(top.path + '/') && f.images.length > 0) };
     });
+    return enriched;
+  };
 
+  // Build folder list from flat items
+  useEffect(() => {
+    const raw = localStorage.getItem('folder_data');
+    if (!raw) { navigate('/'); return; }
+    const data = JSON.parse(raw);
+    setFolderData(data);
+    const enriched = buildFolders(data);
     setFolders(enriched);
     if (enriched.length > 0) {
       setImages(enriched[0].allImages);
@@ -123,6 +123,24 @@ function SlideshowPage() {
     setImgIdx(0);
     setImgErr(false);
     setIsPlaying(false);
+  };
+
+  const handleRefresh = async () => {
+    const link = localStorage.getItem('drive_link');
+    if (!link) return;
+    try {
+      setRefreshing(true);
+      toast.info('Refreshing folder data...');
+      const res = await axios.post(`${API}/drive/folder?refresh=true`, { drive_link: link }, { timeout: 300000 });
+      localStorage.setItem('folder_data', JSON.stringify(res.data));
+      setFolderData(res.data);
+      const enriched = buildFolders(res.data);
+      setFolders(enriched);
+      if (enriched.length > 0) { selectFolder(0); }
+      toast.success(`Refreshed! ${res.data.total_images} images in ${res.data.total_folders} folders`);
+    } catch (err) {
+      toast.error('Refresh failed. Try again.');
+    } finally { setRefreshing(false); }
   };
 
   const next = useCallback(() => {
@@ -161,7 +179,12 @@ function SlideshowPage() {
       {/* Sidebar: Folders */}
       <div className="w-72 border-r border-[#E5E5E5] flex flex-col h-full bg-white flex-shrink-0">
         <div className="p-5 border-b border-[#E5E5E5]">
-          <h2 className="font-heading text-lg font-bold text-[#0A0A0A] tracking-tight truncate" data-testid="folder-title">{folderData.folder_name}</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="font-heading text-lg font-bold text-[#0A0A0A] tracking-tight truncate" data-testid="folder-title">{folderData.folder_name}</h2>
+            <Button data-testid="refresh-button" onClick={handleRefresh} disabled={refreshing} variant="ghost" size="icon" className="h-7 w-7 rounded-sm hover:bg-[#F2F2F2] flex-shrink-0" title="Refresh folder data">
+              <ArrowClockwise className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} weight="bold" />
+            </Button>
+          </div>
           <p className="text-xs text-[#525252] mt-1 font-body">{folders.length} folders</p>
         </div>
 

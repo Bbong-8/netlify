@@ -249,13 +249,27 @@ async def root():
 
 
 @api_router.post("/drive/folder")
-async def get_folder_structure(request: DriveLinkRequest):
-    """Get folder structure from a public Drive link - always fresh scan"""
+async def get_folder_structure(request: DriveLinkRequest, refresh: bool = False):
+    """Get folder structure from a public Drive link. Use refresh=true to force re-scan."""
     try:
         folder_id = extract_folder_id(request.drive_link)
-        logger.info(f"Fetching folder structure for ID: {folder_id}")
+        logger.info(f"Fetching folder structure for ID: {folder_id}, refresh={refresh}")
 
-        # Always do a fresh scan (no cache) so new images show up
+        # Use cache if available and not forcing refresh (cache valid for 5 min)
+        if not refresh:
+            cached = await db.folder_cache.find_one({"folder_id": folder_id}, {"_id": 0})
+            if cached and cached.get("created_at"):
+                from datetime import datetime as dt
+                try:
+                    cached_time = dt.fromisoformat(cached["created_at"])
+                    age_seconds = (datetime.now(timezone.utc) - cached_time).total_seconds()
+                    if age_seconds < 300:  # 5 minute cache
+                        logger.info(f"Returning cached result for '{cached['folder_name']}' (age: {int(age_seconds)}s)")
+                        return cached
+                except:
+                    pass
+
+        # Fresh scan
         items, folder_name = fetch_all_recursive(folder_id)
 
         if not items:

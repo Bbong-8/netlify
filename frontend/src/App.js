@@ -352,20 +352,19 @@ const SlideshowPage = () => {
                 </div>
               )}
 
-              {/* Folder Name Overlay */}
-              <div className="absolute bottom-24 left-0 right-0 flex justify-center px-8 z-10">
-                <div className="bg-white/90 backdrop-blur-sm px-6 py-4 border border-[#E5E5E5] max-w-2xl">
-                  <h3
-                    className="font-heading text-2xl sm:text-3xl lg:text-4xl tracking-tighter font-black text-[#0A0A0A] text-center"
+              {/* Folder Name Overlay - compact bottom bar */}
+              <div className="absolute bottom-16 left-0 right-0 z-10">
+                <div className="bg-[#0A0A0A]/75 backdrop-blur-sm px-4 py-2 mx-auto w-fit max-w-[80%]">
+                  <p
+                    className="text-sm font-body font-medium text-white text-center truncate"
                     data-testid="folder-name-overlay"
+                    style={{ fontSize: '14px' }}
                   >
                     {currentSlide.folderName || currentSlide.parent_folder || currentSlide.name}
-                  </h3>
-                  {currentSlide.type === 'image' && (
-                    <p className="text-xs text-[#525252] text-center mt-1 font-body truncate">
-                      {currentSlide.name}
-                    </p>
-                  )}
+                    {currentSlide.type === 'image' && (
+                      <span className="text-white/60 ml-2">{currentSlide.name}</span>
+                    )}
+                  </p>
                 </div>
               </div>
             </>

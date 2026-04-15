@@ -214,6 +214,12 @@ async def get_folder_structure(request: DriveLinkRequest):
 
         items, folder_name = fetch_all_recursive(folder_id)
 
+        if not items:
+            raise HTTPException(
+                status_code=400,
+                detail="No content found. Make sure the folder is shared publicly and contains files."
+            )
+
         total_images = sum(1 for i in items if i.type == 'image')
         total_folders = sum(1 for i in items if i.type == 'folder')
 

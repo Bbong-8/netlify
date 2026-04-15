@@ -294,6 +294,8 @@ async def get_folder(request: DriveLinkRequest, session_id: str = Query(...)):
     
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching folder: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Error accessing folder: {str(e)}")
@@ -328,6 +330,8 @@ async def get_drive_image(file_id: str, session_id: str = Query(...)):
             headers={"Content-Disposition": f"inline; filename={file_metadata.get('name', 'image.jpg')}"}
         )
     
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching image: {str(e)}")
         raise HTTPException(status_code=404, detail=f"Image not found: {str(e)}")

@@ -9,9 +9,9 @@ class DriveAPITester:
         self.api_url = f"{base_url}/api"
         self.tests_run = 0
         self.tests_passed = 0
-        self.session_id = None
+        self.test_drive_link = "https://drive.google.com/drive/folders/191XLWHWCx-532MN-vtZKRDbCvxCIaerZ"
 
-    def run_test(self, name, method, endpoint, expected_status, data=None, params=None):
+    def run_test(self, name, method, endpoint, expected_status, data=None, timeout=30):
         """Run a single API test"""
         url = f"{self.api_url}/{endpoint}" if endpoint else self.api_url
         headers = {'Content-Type': 'application/json'}
@@ -22,9 +22,11 @@ class DriveAPITester:
         
         try:
             if method == 'GET':
-                response = requests.get(url, headers=headers, params=params, timeout=10)
+                response = requests.get(url, headers=headers, timeout=timeout)
             elif method == 'POST':
-                response = requests.post(url, json=data, headers=headers, params=params, timeout=10)
+                response = requests.post(url, json=data, headers=headers, timeout=timeout)
+            elif method == 'DELETE':
+                response = requests.delete(url, headers=headers, timeout=timeout)
 
             print(f"   Response Status: {response.status_code}")
             
@@ -34,7 +36,7 @@ class DriveAPITester:
                 print(f"✅ Passed - Status: {response.status_code}")
                 try:
                     response_data = response.json()
-                    print(f"   Response: {json.dumps(response_data, indent=2)[:200]}...")
+                    print(f"   Response: {json.dumps(response_data, indent=2)[:300]}...")
                     return True, response_data
                 except:
                     return True, {}
@@ -48,7 +50,7 @@ class DriveAPITester:
                 return False, {}
 
         except requests.exceptions.Timeout:
-            print(f"❌ Failed - Request timeout")
+            print(f"❌ Failed - Request timeout after {timeout}s")
             return False, {}
         except Exception as e:
             print(f"❌ Failed - Error: {str(e)}")
@@ -63,99 +65,123 @@ class DriveAPITester:
             200
         )
 
-    def test_drive_connect(self):
-        """Test Google Drive OAuth initiation"""
+    def test_folder_structure_valid_link(self):
+        """Test folder structure with valid public Drive link"""
+        print(f"   Testing with Drive link: {self.test_drive_link}")
         success, response = self.run_test(
-            "Drive OAuth Connect",
-            "GET",
-            "drive/connect",
-            200
+            "Folder Structure - Valid Public Link",
+            "POST",
+            "drive/folder",
+            200,
+            data={"drive_link": self.test_drive_link},
+            timeout=120  # Large folder may take time
         )
         
-        if success and 'authorization_url' in response and 'session_id' in response:
-            self.session_id = response['session_id']
-            print(f"   Session ID: {self.session_id}")
-            print(f"   Auth URL: {response['authorization_url'][:100]}...")
-            return True
-        return False
+        if success:
+            print(f"   Folder Name: {response.get('folder_name', 'N/A')}")
+            print(f"   Total Images: {response.get('total_images', 0)}")
+            print(f"   Total Folders: {response.get('total_folders', 0)}")
+            print(f"   Items Count: {len(response.get('items', []))}")
+            
+            # Store first image ID for image test
+            items = response.get('items', [])
+            image_items = [item for item in items if item.get('type') == 'image']
+            if image_items:
+                self.first_image_id = image_items[0].get('id')
+                print(f"   First Image ID: {self.first_image_id}")
+            
+        return success
 
-    def test_folder_no_session(self):
-        """Test folder endpoint without session"""
+    def test_folder_structure_invalid_link(self):
+        """Test folder structure with invalid Drive link"""
         return self.run_test(
-            "Folder - No Session",
+            "Folder Structure - Invalid Link",
             "POST",
             "drive/folder",
-            422,  # Missing required query parameter
-            data={"drive_link": "https://drive.google.com/drive/folders/test"}
+            400,
+            data={"drive_link": "invalid_link"}
         )
 
-    def test_folder_invalid_session(self):
-        """Test folder endpoint with invalid session"""
+    def test_folder_structure_missing_link(self):
+        """Test folder structure without drive_link"""
         return self.run_test(
-            "Folder - Invalid Session",
+            "Folder Structure - Missing Link",
             "POST",
             "drive/folder",
-            401,  # Not authenticated
-            data={"drive_link": "https://drive.google.com/drive/folders/test"},
-            params={"session_id": "invalid_session_id"}
+            422,
+            data={}
         )
 
-    def test_folder_invalid_link(self):
-        """Test folder endpoint with invalid link format"""
-        if not self.session_id:
-            print("⚠️  Skipping test - no session ID available")
+    def test_image_proxy_valid_id(self):
+        """Test image proxy with valid file ID"""
+        if not hasattr(self, 'first_image_id') or not self.first_image_id:
+            print("⚠️  Skipping test - no image ID available from folder test")
             return False
             
+        success, _ = self.run_test(
+            "Image Proxy - Valid File ID",
+            "GET",
+            f"drive/image/{self.first_image_id}",
+            200,
+            timeout=15
+        )
+        return success
+
+    def test_image_proxy_invalid_id(self):
+        """Test image proxy with invalid file ID"""
         return self.run_test(
-            "Folder - Invalid Link Format",
+            "Image Proxy - Invalid File ID",
+            "GET",
+            "drive/image/invalid_file_id",
+            404
+        )
+
+    def test_cache_functionality(self):
+        """Test caching by making the same request twice"""
+        print("   Testing cache functionality with second request...")
+        
+        # First request (should be cached from previous test)
+        start_time = datetime.now()
+        success1, response1 = self.run_test(
+            "Cache Test - Second Request",
             "POST",
             "drive/folder",
-            400,  # Bad request due to invalid link format
-            data={"drive_link": "invalid_link"},
-            params={"session_id": self.session_id}
-        )
-
-    def test_drive_status_invalid_session(self):
-        """Test drive status with invalid session"""
-        return self.run_test(
-            "Drive Status - Invalid Session",
-            "GET",
-            "drive/status",
             200,
-            params={"session_id": "invalid_session_id"}
+            data={"drive_link": self.test_drive_link},
+            timeout=30
         )
+        end_time = datetime.now()
+        
+        if success1:
+            duration = (end_time - start_time).total_seconds()
+            print(f"   Request Duration: {duration:.2f}s")
+            if duration < 5:
+                print("   ✅ Cache appears to be working (fast response)")
+            else:
+                print("   ⚠️  Cache may not be working (slow response)")
+                
+        return success1
 
-    def test_drive_image_no_session(self):
-        """Test drive image endpoint without session"""
+    def test_clear_cache(self):
+        """Test cache clearing functionality"""
+        # Extract folder ID from test link
+        import re
+        folder_id_match = re.search(r'folders/([a-zA-Z0-9-_]+)', self.test_drive_link)
+        if not folder_id_match:
+            print("⚠️  Skipping test - cannot extract folder ID")
+            return False
+            
+        folder_id = folder_id_match.group(1)
         return self.run_test(
-            "Drive Image - No Session",
-            "GET",
-            "drive/image/test_file_id",
-            422  # Missing required query parameter
-        )
-
-    def test_drive_image_invalid_session(self):
-        """Test drive image endpoint with invalid session"""
-        return self.run_test(
-            "Drive Image - Invalid Session",
-            "GET",
-            "drive/image/test_file_id",
-            401,  # Not authenticated
-            params={"session_id": "invalid_session_id"}
-        )
-
-    def test_drive_callback_missing_params(self):
-        """Test OAuth callback without required parameters"""
-        return self.run_test(
-            "Drive Callback - Missing Params",
-            "GET",
-            "drive/callback",
-            422  # Missing required query parameters
+            "Clear Cache",
+            "DELETE",
+            f"drive/cache/{folder_id}",
+            200
         )
 
 def main():
-    print("🚀 Starting Google Drive Slideshow API Tests")
-    print("=" * 60)
+    print("🚀 Starting Google Drive Slideshow API Tests (Web Scraping Version)")
+    print("=" * 70)
     
     # Setup
     tester = DriveAPITester()
@@ -165,23 +191,22 @@ def main():
     
     # Test basic endpoints
     tester.test_root_endpoint()
-    tester.test_drive_connect()
     
-    # Test folder endpoints (OAuth-only)
-    tester.test_folder_no_session()
-    tester.test_folder_invalid_session()
-    tester.test_folder_invalid_link()
+    # Test folder structure endpoints
+    tester.test_folder_structure_valid_link()
+    tester.test_folder_structure_invalid_link()
+    tester.test_folder_structure_missing_link()
     
-    # Test status and image endpoints
-    tester.test_drive_status_invalid_session()
-    tester.test_drive_image_no_session()
-    tester.test_drive_image_invalid_session()
+    # Test image proxy endpoints
+    tester.test_image_proxy_valid_id()
+    tester.test_image_proxy_invalid_id()
     
-    # Test callback endpoint
-    tester.test_drive_callback_missing_params()
+    # Test caching functionality
+    tester.test_cache_functionality()
+    tester.test_clear_cache()
 
     # Print results
-    print("\n" + "=" * 60)
+    print("\n" + "=" * 70)
     print(f"📊 Test Results: {tester.tests_passed}/{tester.tests_run} tests passed")
     
     if tester.tests_passed == tester.tests_run:

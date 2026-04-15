@@ -1,49 +1,36 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Query
-from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional
-import uuid
+from pydantic import BaseModel
+from typing import List
 from datetime import datetime, timezone
 import re
 import io
-
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
-from google_auth_oauthlib.flow import Flow
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request as GoogleRequest
+import requests as http_requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# Create the main app without a prefix
 app = FastAPI()
-
-# Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+executor = ThreadPoolExecutor(max_workers=15)
 
-# Models
-class DriveAuthResponse(BaseModel):
-    authorization_url: str
+IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg', '.tiff', '.heic', '.heif'}
+
 
 class DriveLinkRequest(BaseModel):
     drive_link: str
@@ -51,300 +38,244 @@ class DriveLinkRequest(BaseModel):
 class FolderItem(BaseModel):
     id: str
     name: str
-    type: str  # 'folder' or 'image'
+    type: str
     path: str
-    thumbnail_url: Optional[str] = None
-    web_view_link: Optional[str] = None
+    parent_folder: str = ""
 
 class FolderStructureResponse(BaseModel):
     items: List[FolderItem]
     folder_name: str
+    total_images: int
+    total_folders: int
 
 
-# Helper function to extract folder ID from Drive link
 def extract_folder_id(drive_link: str) -> str:
-    """Extract folder ID from various Google Drive link formats"""
     patterns = [
         r'folders/([a-zA-Z0-9-_]+)',
         r'id=([a-zA-Z0-9-_]+)',
         r'drive\.google\.com/drive/u/\d+/folders/([a-zA-Z0-9-_]+)',
     ]
-    
     for pattern in patterns:
         match = re.search(pattern, drive_link)
         if match:
             return match.group(1)
-    
-    # If it's just an ID
     if re.match(r'^[a-zA-Z0-9-_]+$', drive_link.strip()):
         return drive_link.strip()
-    
-    raise ValueError("Invalid Drive link format")
+    raise ValueError("Invalid Drive link format.")
 
 
-async def get_authenticated_drive_service(session_id: str):
-    """Get authenticated Drive service from stored credentials"""
-    creds_doc = await db.drive_credentials.find_one({"session_id": session_id})
-    if not creds_doc:
-        raise HTTPException(
-            status_code=401,
-            detail="Not authenticated. Please connect your Google Drive first."
-        )
-    
-    creds = Credentials(
-        token=creds_doc["access_token"],
-        refresh_token=creds_doc.get("refresh_token"),
-        token_uri=creds_doc["token_uri"],
-        client_id=creds_doc["client_id"],
-        client_secret=creds_doc["client_secret"],
-        scopes=creds_doc["scopes"]
-    )
-    
-    # Auto-refresh if expired
-    if creds.expired and creds.refresh_token:
-        logger.info(f"Refreshing expired token for session {session_id}")
-        creds.refresh(GoogleRequest())
-        
-        await db.drive_credentials.update_one(
-            {"session_id": session_id},
-            {"$set": {
-                "access_token": creds.token,
-                "expiry": creds.expiry.isoformat() if creds.expiry else None,
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }}
-        )
-    
-    return build('drive', 'v3', credentials=creds)
+def is_image_file(name: str) -> bool:
+    return any(name.lower().endswith(ext) for ext in IMAGE_EXTENSIONS)
 
 
-# Recursive function to get all folders and images
-async def get_folder_contents_recursive(service, folder_id: str, current_path: str = "") -> List[FolderItem]:
-    """Recursively fetch all folders and images from a Drive folder"""
+def fetch_folder_entries(folder_id: str):
+    """Fetch entries from a public Google Drive folder"""
+    url = f'https://drive.google.com/embeddedfolderview?id={folder_id}'
+    resp = http_requests.get(url, timeout=15)
+    if resp.status_code != 200:
+        return [], "Unknown Folder"
+
+    title_match = re.search(r'<title>(.*?)</title>', resp.text)
+    folder_name = title_match.group(1) if title_match else "Drive Folder"
+
+    entry_ids = re.findall(r'id="entry-([a-zA-Z0-9_-]+)"', resp.text)
+    entry_titles = re.findall(r'<div class="flip-entry-title">(.*?)</div>', resp.text)
+
+    return [{"id": eid, "name": etitle} for eid, etitle in zip(entry_ids, entry_titles)], folder_name
+
+
+def scan_folder_parallel(folder_id, folder_name_prefix, parent_folder):
+    """Scan a single folder and return its items (images + subfolder entries)"""
+    entries, _ = fetch_folder_entries(folder_id)
     items = []
-    
-    try:
-        # Query for folders and images
-        query = f"'{folder_id}' in parents and trashed=false and (mimeType='application/vnd.google-apps.folder' or mimeType contains 'image/')"
-        
-        page_token = None
-        while True:
-            results = service.files().list(
-                q=query,
-                spaces='drive',
-                fields='nextPageToken, files(id, name, mimeType, thumbnailLink, webViewLink)',
-                pageToken=page_token,
-                pageSize=100
-            ).execute()
-            
-            files = results.get('files', [])
-            
-            for file in files:
-                item_path = f"{current_path}/{file['name']}" if current_path else file['name']
-                
-                if file['mimeType'] == 'application/vnd.google-apps.folder':
-                    # Add folder
-                    items.append(FolderItem(
-                        id=file['id'],
-                        name=file['name'],
-                        type='folder',
-                        path=item_path
-                    ))
-                    
-                    # Recursively get contents of subfolder
-                    sub_items = await get_folder_contents_recursive(service, file['id'], item_path)
-                    items.extend(sub_items)
-                
-                elif 'image/' in file['mimeType']:
-                    # Add image
-                    items.append(FolderItem(
-                        id=file['id'],
-                        name=file['name'],
-                        type='image',
-                        path=item_path,
-                        thumbnail_url=file.get('thumbnailLink'),
-                        web_view_link=file.get('webViewLink')
-                    ))
-            
-            page_token = results.get('nextPageToken')
-            if not page_token:
-                break
-    
-    except Exception as e:
-        logger.error(f"Error fetching folder contents: {str(e)}")
-        raise HTTPException(status_code=400, detail=f"Error accessing Drive folder: {str(e)}")
-    
-    return items
+    subfolders = []
+
+    for entry in entries:
+        item_path = f"{folder_name_prefix}/{entry['name']}" if folder_name_prefix else entry['name']
+        if is_image_file(entry['name']):
+            items.append(FolderItem(
+                id=entry["id"], name=entry["name"], type='image',
+                path=item_path, parent_folder=parent_folder
+            ))
+        else:
+            # Assume non-image entries are folders
+            items.append(FolderItem(
+                id=entry["id"], name=entry["name"], type='folder',
+                path=item_path, parent_folder=parent_folder
+            ))
+            subfolders.append((entry["id"], entry["name"], item_path))
+
+    return items, subfolders
 
 
-# Routes
+def fetch_all_recursive(folder_id, max_depth=4):
+    """Fetch entire folder tree using parallel HTTP requests at each level"""
+    entries, folder_name = fetch_folder_entries(folder_id)
+    all_items = []
+
+    # Level 1: classify top-level entries
+    top_images = []
+    top_folders = []
+    for entry in entries:
+        if is_image_file(entry['name']):
+            top_images.append(FolderItem(
+                id=entry["id"], name=entry["name"], type='image',
+                path=entry["name"], parent_folder=folder_name
+            ))
+        else:
+            top_folders.append(entry)
+            all_items.append(FolderItem(
+                id=entry["id"], name=entry["name"], type='folder',
+                path=entry["name"], parent_folder=folder_name
+            ))
+    all_items.extend(top_images)
+
+    if max_depth <= 1:
+        return all_items, folder_name
+
+    # Level 2: scan all top-level folders in parallel
+    level2_futures = {}
+    for folder_entry in top_folders:
+        future = executor.submit(
+            scan_folder_parallel,
+            folder_entry["id"],
+            folder_entry["name"],
+            folder_entry["name"]
+        )
+        level2_futures[future] = folder_entry
+
+    level3_queue = []  # (folder_id, path, parent)
+    for future in as_completed(level2_futures):
+        parent_entry = level2_futures[future]
+        try:
+            items, subfolders = future.result()
+            all_items.extend(items)
+            if max_depth > 2:
+                level3_queue.extend(subfolders)
+        except Exception as e:
+            logger.error(f"Error scanning folder {parent_entry['name']}: {e}")
+
+    if max_depth <= 2 or not level3_queue:
+        return all_items, folder_name
+
+    # Level 3: scan all subfolders in parallel
+    level3_futures = {}
+    for fid, fname, fpath in level3_queue:
+        future = executor.submit(scan_folder_parallel, fid, fpath, fpath)
+        level3_futures[future] = (fid, fname, fpath)
+
+    level4_queue = []
+    for future in as_completed(level3_futures):
+        parent_info = level3_futures[future]
+        try:
+            items, subfolders = future.result()
+            all_items.extend(items)
+            if max_depth > 3:
+                level4_queue.extend(subfolders)
+        except Exception as e:
+            logger.error(f"Error scanning subfolder {parent_info[1]}: {e}")
+
+    if max_depth <= 3 or not level4_queue:
+        return all_items, folder_name
+
+    # Level 4: one more level deep
+    level4_futures = {}
+    for fid, fname, fpath in level4_queue:
+        future = executor.submit(scan_folder_parallel, fid, fpath, fpath)
+        level4_futures[future] = (fid, fname, fpath)
+
+    for future in as_completed(level4_futures):
+        try:
+            items, _ = future.result()
+            all_items.extend(items)
+        except Exception as e:
+            pass
+
+    return all_items, folder_name
+
+
 @api_router.get("/")
 async def root():
     return {"message": "Google Drive Slideshow API"}
 
 
-@api_router.get("/drive/connect")
-async def connect_drive():
-    """Initiate Google Drive OAuth flow"""
-    try:
-        session_id = str(uuid.uuid4())
-        redirect_uri = os.getenv("GOOGLE_DRIVE_REDIRECT_URI")
-        
-        flow = Flow.from_client_config(
-            {
-                "web": {
-                    "client_id": os.getenv("GOOGLE_CLIENT_ID"),
-                    "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
-                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                    "token_uri": "https://oauth2.googleapis.com/token",
-                    "redirect_uris": [redirect_uri]
-                }
-            },
-            scopes=['https://www.googleapis.com/auth/drive.readonly'],
-            redirect_uri=redirect_uri
-        )
-        
-        authorization_url, state = flow.authorization_url(
-            access_type='offline',
-            include_granted_scopes='true',
-            prompt='consent',
-            state=session_id
-        )
-        
-        logger.info(f"Drive OAuth initiated for session {session_id}")
-        return {"authorization_url": authorization_url, "session_id": session_id}
-    
-    except Exception as e:
-        logger.error(f"Failed to initiate OAuth: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to initiate OAuth: {str(e)}")
-
-
-@api_router.get("/drive/callback")
-async def drive_callback(code: str = Query(...), state: str = Query(...)):
-    """Handle Google Drive OAuth callback"""
-    try:
-        redirect_uri = os.getenv("GOOGLE_DRIVE_REDIRECT_URI")
-        
-        flow = Flow.from_client_config(
-            {
-                "web": {
-                    "client_id": os.getenv("GOOGLE_CLIENT_ID"),
-                    "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
-                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                    "token_uri": "https://oauth2.googleapis.com/token",
-                    "redirect_uris": [redirect_uri]
-                }
-            },
-            scopes=None,
-            redirect_uri=redirect_uri
-        )
-        
-        flow.fetch_token(code=code)
-        credentials = flow.credentials
-        
-        logger.info(f"Drive credentials obtained for session {state}")
-        
-        # Store credentials
-        await db.drive_credentials.update_one(
-            {"session_id": state},
-            {"$set": {
-                "session_id": state,
-                "access_token": credentials.token,
-                "refresh_token": credentials.refresh_token,
-                "token_uri": credentials.token_uri,
-                "client_id": credentials.client_id,
-                "client_secret": credentials.client_secret,
-                "scopes": credentials.scopes,
-                "expiry": credentials.expiry.isoformat() if credentials.expiry else None,
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }},
-            upsert=True
-        )
-        
-        # Redirect to frontend
-        frontend_url = os.getenv("FRONTEND_URL")
-        return RedirectResponse(url=f"{frontend_url}/?drive_connected=true&session_id={state}")
-    
-    except Exception as e:
-        logger.error(f"OAuth callback failed: {str(e)}")
-        frontend_url = os.getenv("FRONTEND_URL")
-        return RedirectResponse(url=f"{frontend_url}/?error=auth_failed")
-
-
 @api_router.post("/drive/folder")
-async def get_folder(request: DriveLinkRequest, session_id: str = Query(...)):
-    """Get folder structure from Drive with authentication"""
+async def get_folder_structure(request: DriveLinkRequest):
+    """Get folder structure from a public Drive link"""
     try:
         folder_id = extract_folder_id(request.drive_link)
-        logger.info(f"Extracting folder ID: {folder_id} for session {session_id}")
-        
-        service = await get_authenticated_drive_service(session_id)
-        
-        # Get folder metadata
-        folder = service.files().get(
-            fileId=folder_id,
-            fields='id, name'
-        ).execute()
-        folder_name = folder['name']
-        
-        # Get all contents recursively
-        items = await get_folder_contents_recursive(service, folder_id)
-        
-        logger.info(f"Found {len(items)} items in folder")
-        return FolderStructureResponse(items=items, folder_name=folder_name)
-    
+        logger.info(f"Fetching folder structure for ID: {folder_id}")
+
+        # Check cache first
+        cached = await db.folder_cache.find_one({"folder_id": folder_id}, {"_id": 0})
+        if cached:
+            logger.info(f"Returning cached result for '{cached['folder_name']}'")
+            return cached
+
+        items, folder_name = fetch_all_recursive(folder_id)
+
+        total_images = sum(1 for i in items if i.type == 'image')
+        total_folders = sum(1 for i in items if i.type == 'folder')
+
+        logger.info(f"Found {total_images} images and {total_folders} folders in '{folder_name}'")
+
+        result = {
+            "folder_id": folder_id,
+            "folder_name": folder_name,
+            "items": [item.model_dump() for item in items],
+            "total_images": total_images,
+            "total_folders": total_folders,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        await db.folder_cache.update_one(
+            {"folder_id": folder_id}, {"$set": result}, upsert=True
+        )
+
+        return FolderStructureResponse(
+            items=items, folder_name=folder_name,
+            total_images=total_images, total_folders=total_folders
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Error fetching folder: {str(e)}")
-        raise HTTPException(status_code=400, detail=f"Error accessing folder: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Error: {str(e)}. Make sure the folder is shared publicly.")
+
+
+@api_router.delete("/drive/cache/{folder_id}")
+async def clear_cache(folder_id: str):
+    """Clear cached folder data to force re-scan"""
+    await db.folder_cache.delete_one({"folder_id": folder_id})
+    return {"message": "Cache cleared"}
 
 
 @api_router.get("/drive/image/{file_id}")
-async def get_drive_image(file_id: str, session_id: str = Query(...)):
-    """Get image from Drive"""
+async def get_drive_image(file_id: str):
+    """Proxy image from public Google Drive"""
     try:
-        service = await get_authenticated_drive_service(session_id)
-        
-        # Get file metadata
-        file_metadata = service.files().get(
-            fileId=file_id,
-            fields='mimeType, name'
-        ).execute()
-        
-        # Download file
-        request = service.files().get_media(fileId=file_id)
-        file_stream = io.BytesIO()
-        downloader = MediaIoBaseDownload(file_stream, request)
-        
-        done = False
-        while not done:
-            status, done = downloader.next_chunk()
-        
-        file_stream.seek(0)
-        
+        thumb_url = f'https://drive.google.com/thumbnail?id={file_id}&sz=w1920'
+        resp = http_requests.get(thumb_url, timeout=15, allow_redirects=True)
+
+        if resp.status_code != 200:
+            view_url = f'https://drive.google.com/uc?export=view&id={file_id}'
+            resp = http_requests.get(view_url, timeout=15, allow_redirects=True)
+
+        if resp.status_code != 200:
+            raise HTTPException(status_code=404, detail="Image not found")
+
+        content_type = resp.headers.get('content-type', 'image/jpeg')
         return StreamingResponse(
-            file_stream,
-            media_type=file_metadata.get('mimeType', 'image/jpeg'),
-            headers={"Content-Disposition": f"inline; filename={file_metadata.get('name', 'image.jpg')}"}
+            io.BytesIO(resp.content),
+            media_type=content_type,
+            headers={"Cache-Control": "public, max-age=3600"}
         )
-    
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching image: {str(e)}")
+        logger.error(f"Error fetching image {file_id}: {str(e)}")
         raise HTTPException(status_code=404, detail=f"Image not found: {str(e)}")
 
 
-@api_router.get("/drive/status")
-async def check_drive_status(session_id: str = Query(...)):
-    """Check if Drive is connected for a session"""
-    creds_doc = await db.drive_credentials.find_one({"session_id": session_id})
-    return {"connected": creds_doc is not None}
-
-
-# Include the router in the main app
 app.include_router(api_router)
 
 app.add_middleware(

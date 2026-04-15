@@ -1,0 +1,87 @@
+{
+  "theme": "LIGHT",
+  "archetype": "4 (Swiss & High-Contrast)",
+  "colors": {
+    "primary": "#002FA7",
+    "background": "#FFFFFF",
+    "surface": "#F2F2F2",
+    "surface_glass": "rgba(255, 255, 255, 0.7)",
+    "text_primary": "#0A0A0A",
+    "text_secondary": "#525252",
+    "border": "#E5E5E5",
+    "overlay": "rgba(10, 10, 10, 0.4)",
+    "accent_warning": "#FF3B30"
+  },
+  "typography": {
+    "heading_font": "Cabinet Grotesk",
+    "body_font": "IBM Plex Sans",
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl tracking-tighter font-black",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl tracking-tight font-bold",
+      "h3": "text-xl sm:text-2xl tracking-tight font-medium",
+      "body": "text-base leading-relaxed text-[#525252]",
+      "label": "text-xs uppercase tracking-[0.2em] font-bold text-[#0A0A0A]"
+    }
+  },
+  "layout": {
+    "global": "h-screen flex overflow-hidden bg-[#FFFFFF]",
+    "sidebar": "w-72 or w-80 border-r border-[#E5E5E5] flex flex-col h-full bg-[#FFFFFF]",
+    "main_content": "flex-1 relative flex flex-col h-full overflow-hidden bg-[#F2F2F2]",
+    "spacing": "Generous spacing. p-6 or p-8 for containers. gap-4 for list items.",
+    "bento_grid": "Not strictly applicable for fullscreen slideshow, but use 'Control Room' dense grid principles for the sidebar tree list."
+  },
+  "components": {
+    "buttons": "Flat, sharp edges or minimal rounding (rounded-sm). Primary button: bg-[#002FA7] text-white hover:bg-[#002FA7]/90. Secondary: bg-white text-[#0A0A0A] border border-[#E5E5E5] hover:bg-[#F2F2F2].",
+    "inputs": "Shadcn input with custom minimal styling. rounded-sm border-[#E5E5E5] focus:border-[#0A0A0A] focus:ring-1 focus:ring-[#0A0A0A].",
+    "slideshow_overlay": "Brutalist label for folder names. Massive typography (Cabinet Grotesk text-6xl+). Placed centrally. Text color #FFFFFF with heavy text-shadow or a stark white solid box (bg-white) with black text for Swiss contrast.",
+    "controls": "Glassmorphic (backdrop-blur-xl bg-white/70) or solid white control bar fixed at the bottom center or overlaying the bottom. gap-6 items-center flex. Use 1px border (#E5E5E5).",
+    "progress_indicator": "Thin sharp line at the top of the image container or screen, bg-[#0A0A0A] or bg-[#002FA7] h-1.",
+    "folder_tree": "Dense layout in sidebar. Left-aligned text. Active folder highlighted with bg-[#F2F2F2] and text-[#0A0A0A]."
+  },
+  "motion": {
+    "transitions": "transition-all duration-300 ease-in-out",
+    "slideshow": "Subtle scale-up (scale 1.05 to 1) and crossfade (opacity 0 to 1) for a cinematic high-end feel.",
+    "hover": "For buttons: slight background darkening. No heavy shadow lifts."
+  },
+  "media": {
+    "fallback_backgrounds": [
+      {
+        "url": "https://images.unsplash.com/photo-1567010375323-647e954af519?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2OTV8MHwxfHNlYXJjaHwyfHx3aGl0ZSUyMG1pbmltYWxpc3QlMjB0ZXh0dXJlfGVufDB8fHx3aGl0ZXwxNzc2MjI0ODg5fDA&ixlib=rb-4.1.0&q=85",
+        "category": "placeholder_bg",
+        "description": "Black and white minimal wall texture for folder backgrounds lacking images"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1584610559454-14c70cd3b869?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA6OTV8MHwxfHNlYXJjaHwzfHx3aGl0ZSUyMG1pbmltYWxpc3QlMjB0ZXh0dXJlfGVufDB8fHx3aGl0ZXwxNzc2MjI0ODg5fDA&ixlib=rb-4.1.0&q=85",
+        "category": "placeholder_bg",
+        "description": "White paper texture for folder backgrounds"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1627810872480-ed5d132a77a9?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2OTV8MHwxfHNlYXJjaHw0fHx3aGl0ZSUyMG1pbmltYWxpc3QlMjB0ZXh0dXJlfGVufDB8fHx3aGl0ZXwxNzc2MjI0ODg5fDA&ixlib=rb-4.1.0&q=85",
+        "category": "placeholder_bg",
+        "description": "White minimal textile texture"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1548685913-fe6678babe8d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2OTV8MHwxfHNlYXJjaHwxfHx3aGl0ZSUyMG1pbmltYWxpc3QlMjB0ZXh0dXJlfGVufDB8fHx3aGl0ZXwxNzc2MjI0ODg5fDA&ixlib=rb-4.1.0&q=85",
+        "category": "placeholder_bg",
+        "description": "White painted wall minimal texture"
+      }
+    ],
+    "logos": [
+      {
+        "url": "https://upload.wikimedia.org/wikipedia/commons/5/53/Google_%22G%22_Logo.svg",
+        "category": "auth_logo",
+        "description": "Google G Logo for OAuth Button"
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Load 'Cabinet Grotesk' for headings and 'IBM Plex Sans' for body using next/font, Fontshare, or standard imports.",
+    "Install Phosphor Icons: yarn add @phosphor-icons/react. Use it for all UI icons (play, pause, next, previous, folder, link).",
+    "Design Paradigm: Follow Archetype 4 (Swiss & High-Contrast) exactly. Focus on stark minimalism, high-contrast borders, and avoiding decorative gradients. Use flat solid colors.",
+    "Dashboard Layout: Build a full-height layout with a sticky left sidebar (border-r border-[#E5E5E5]) containing the Google OAuth button, Drive Link Input Field, and the Folder Tree View.",
+    "Slideshow UI: The main viewing area must be immersive. Images should fill the container (object-cover). Overlay massive, tracking-tight typography (Cabinet Grotesk text-6xl+) for folder/subfolder names.",
+    "Fallback Image: If a folder has no photos to show, randomly select one of the `media.fallback_backgrounds` URLs as the background and display the folder name on top.",
+    "Controls: Place Manual Controls (Next/Previous) and Auto-play Toggle in a minimalist glassmorphic or solid panel anchored to the bottom. Add a sleek progress indicator bar fixed to the top edge.",
+    "Testing: Add explicit `data-testid` attributes to all interactive elements (login-button, drive-link-input, slideshow-next-button, etc)."
+  ]
+}

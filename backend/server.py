@@ -109,13 +109,12 @@ def scan_folder_parallel(folder_id, folder_name_prefix, parent_folder):
 
 
 def fetch_all_recursive(folder_id, max_depth=4):
-    """Fetch entire folder tree using parallel HTTP requests at each level"""
+    """Fetch entire folder tree using parallel HTTP requests, preserving folder order"""
     entries, folder_name = fetch_folder_entries(folder_id)
-    all_items = []
 
-    # Level 1: classify top-level entries
+    # Level 1: classify top-level entries, preserving original order
     top_images = []
-    top_folders = []
+    top_folders = []  # preserves order from Google Drive
     for entry in entries:
         if is_image_file(entry['name']):
             top_images.append(FolderItem(
@@ -124,72 +123,122 @@ def fetch_all_recursive(folder_id, max_depth=4):
             ))
         else:
             top_folders.append(entry)
-            all_items.append(FolderItem(
-                id=entry["id"], name=entry["name"], type='folder',
-                path=entry["name"], parent_folder=folder_name
-            ))
-    all_items.extend(top_images)
 
     if max_depth <= 1:
+        all_items = []
+        for f in top_folders:
+            all_items.append(FolderItem(id=f["id"], name=f["name"], type='folder', path=f["name"], parent_folder=folder_name))
+        all_items.extend(top_images)
         return all_items, folder_name
 
-    # Level 2: scan all top-level folders in parallel
+    # Level 2: scan all top-level folders in parallel, but collect results per folder
     level2_futures = {}
     for folder_entry in top_folders:
-        future = executor.submit(
-            scan_folder_parallel,
-            folder_entry["id"],
-            folder_entry["name"],
-            folder_entry["name"]
-        )
-        level2_futures[future] = folder_entry
+        future = executor.submit(scan_folder_parallel, folder_entry["id"], folder_entry["name"], folder_entry["name"])
+        level2_futures[future] = folder_entry["id"]
 
-    level3_queue = []  # (folder_id, path, parent)
+    # Collect results keyed by folder ID
+    level2_results = {}
     for future in as_completed(level2_futures):
-        parent_entry = level2_futures[future]
+        fid = level2_futures[future]
         try:
             items, subfolders = future.result()
-            all_items.extend(items)
-            if max_depth > 2:
-                level3_queue.extend(subfolders)
+            level2_results[fid] = (items, subfolders)
         except Exception as e:
-            logger.error(f"Error scanning folder {parent_entry['name']}: {e}")
+            logger.error(f"Error scanning folder: {e}")
+            level2_results[fid] = ([], [])
 
-    if max_depth <= 2 or not level3_queue:
-        return all_items, folder_name
+    # Level 3: collect all subfolders and scan in parallel
+    level3_queue = []  # (folder_id, folder_name, path, top_folder_id)
+    for folder_entry in top_folders:
+        fid = folder_entry["id"]
+        if fid in level2_results:
+            _, subfolders = level2_results[fid]
+            for sf_id, sf_name, sf_path in subfolders:
+                level3_queue.append((sf_id, sf_name, sf_path, fid))
 
-    # Level 3: scan all subfolders in parallel
-    level3_futures = {}
-    for fid, fname, fpath in level3_queue:
-        future = executor.submit(scan_folder_parallel, fid, fpath, fpath)
-        level3_futures[future] = (fid, fname, fpath)
+    level3_results = {}
+    if max_depth > 2 and level3_queue:
+        level3_futures = {}
+        for sf_id, sf_name, sf_path, top_fid in level3_queue:
+            future = executor.submit(scan_folder_parallel, sf_id, sf_path, sf_path)
+            level3_futures[future] = (sf_id, top_fid)
 
+        for future in as_completed(level3_futures):
+            sf_id, top_fid = level3_futures[future]
+            try:
+                items, subfolders = future.result()
+                level3_results[sf_id] = (items, subfolders)
+            except Exception as e:
+                level3_results[sf_id] = ([], [])
+
+    # Level 4: go one more level deep
     level4_queue = []
-    for future in as_completed(level3_futures):
-        parent_info = level3_futures[future]
-        try:
-            items, subfolders = future.result()
-            all_items.extend(items)
-            if max_depth > 3:
-                level4_queue.extend(subfolders)
-        except Exception as e:
-            logger.error(f"Error scanning subfolder {parent_info[1]}: {e}")
+    for sf_id, sf_name, sf_path, top_fid in level3_queue:
+        if sf_id in level3_results:
+            _, subfolders = level3_results[sf_id]
+            for ssf_id, ssf_name, ssf_path in subfolders:
+                level4_queue.append((ssf_id, ssf_name, ssf_path, sf_id))
 
-    if max_depth <= 3 or not level4_queue:
-        return all_items, folder_name
+    level4_results = {}
+    if max_depth > 3 and level4_queue:
+        level4_futures = {}
+        for ssf_id, ssf_name, ssf_path, parent_sf_id in level4_queue:
+            future = executor.submit(scan_folder_parallel, ssf_id, ssf_path, ssf_path)
+            level4_futures[future] = ssf_id
 
-    # Level 4: one more level deep
-    level4_futures = {}
-    for fid, fname, fpath in level4_queue:
-        future = executor.submit(scan_folder_parallel, fid, fpath, fpath)
-        level4_futures[future] = (fid, fname, fpath)
+        for future in as_completed(level4_futures):
+            ssf_id = level4_futures[future]
+            try:
+                items, _ = future.result()
+                level4_results[ssf_id] = items
+            except:
+                level4_results[ssf_id] = []
 
-    for future in as_completed(level4_futures):
-        try:
-            items, _ = future.result()
-            all_items.extend(items)
-        except Exception as e:
-            pass
+    # ASSEMBLE in correct order: iterate top folders in original order
+    all_items = []
+    for folder_entry in top_folders:
+        fid = folder_entry["id"]
+        folder_path = folder_entry["name"]
+
+        # Add the top-level folder item
+        all_items.append(FolderItem(
+            id=fid, name=folder_entry["name"], type='folder',
+            path=folder_path, parent_folder=folder_name
+        ))
+
+        if fid not in level2_results:
+            continue
+
+        level2_items, level2_subfolders = level2_results[fid]
+
+        # Separate sub-images and sub-folders from level 2
+        l2_images = [i for i in level2_items if i.type == 'image']
+        l2_folders = [i for i in level2_items if i.type == 'folder']
+
+        # For each subfolder in level 2 (in order), add folder + its images
+        for sf_item in l2_folders:
+            all_items.append(sf_item)  # Add subfolder header
+
+            # Add level 3 items for this subfolder
+            if sf_item.id in level3_results:
+                l3_items, l3_subfolders = level3_results[sf_item.id]
+                l3_images = [i for i in l3_items if i.type == 'image']
+                l3_folders = [i for i in l3_items if i.type == 'folder']
+
+                for l3f in l3_folders:
+                    all_items.append(l3f)
+                    # Add level 4 items
+                    if l3f.id in level4_results:
+                        all_items.extend(level4_results[l3f.id])
+
+                all_items.extend(l3_images)
+
+        # Add direct images of this top folder last
+        all_items.extend(l2_images)
+
+    # Add any root-level images at the end
+    all_items.extend(top_images)
 
     return all_items, folder_name
 

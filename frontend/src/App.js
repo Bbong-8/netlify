@@ -147,7 +147,8 @@ const SlideshowPage = () => {
 
     const items = [];
 
-    // Add image slides with their parent folder name
+    // Walk through items in the order backend provides (already sorted by folder)
+    // Keep images as slides, skip folders that have child images (they're just headers)
     folderData.items.forEach(item => {
       if (item.type === 'image') {
         const folderPath = item.path.substring(0, item.path.lastIndexOf('/')) || folderData.folder_name;
@@ -155,12 +156,8 @@ const SlideshowPage = () => {
           ...item,
           folderName: folderPath
         });
-      }
-    });
-
-    // Add empty folders with fallback images
-    folderData.items.forEach(item => {
-      if (item.type === 'folder') {
+      } else if (item.type === 'folder') {
+        // Check if this folder has any images under it
         const hasImages = folderData.items.some(
           i => i.type === 'image' && i.path.startsWith(item.path + '/')
         );

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import '@/App.css';
@@ -10,6 +10,91 @@ import { toast } from 'sonner';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
+const API_TIMEOUT_MS = 300000; // 5 minutes — large folders need time to scan
+const AUTOPLAY_INTERVAL_MS = 5000;
+
+/* ── Utility: Build folder tree from flat item list ── */
+function buildFolderTree(data) {
+  const folderMap = {};
+  const folderOrder = [];
+
+  data.items.forEach(item => {
+    if (item.type === 'folder' && !folderMap[item.path]) {
+      folderMap[item.path] = { name: item.name, path: item.path, images: [], depth: item.path.split('/').length - 1 };
+      folderOrder.push(item.path);
+    }
+  });
+
+  data.items.forEach(item => {
+    if (item.type === 'image') {
+      const parentPath = item.path.substring(0, item.path.lastIndexOf('/'));
+      if (folderMap[parentPath]) {
+        folderMap[parentPath].images.push(item);
+      }
+    }
+  });
+
+  const folderList = folderOrder.map(p => folderMap[p]).filter(Boolean);
+  const topLevel = folderList.filter(f => f.depth === 0);
+
+  return topLevel.map(top => {
+    const allImages = [];
+    folderList.forEach(f => {
+      if (f.path === top.path || f.path.startsWith(top.path + '/')) {
+        allImages.push(...f.images);
+      }
+    });
+    const subfolders = folderList.filter(f => f.path.startsWith(top.path + '/') && f.images.length > 0);
+    return { ...top, allImages, subfolders };
+  });
+}
+
+/* ── Hook: Slideshow navigation ── */
+function useSlideshow(imageCount) {
+  const [imgIdx, setImgIdx] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [imgErr, setImgErr] = useState(false);
+  const timerRef = useRef(null);
+
+  const next = useCallback(() => {
+    if (imageCount === 0) return;
+    setImgIdx(prev => (prev + 1) % imageCount);
+    setImgErr(false);
+  }, [imageCount]);
+
+  const prev = useCallback(() => {
+    if (imageCount === 0) return;
+    setImgIdx(prev => (prev - 1 + imageCount) % imageCount);
+    setImgErr(false);
+  }, [imageCount]);
+
+  const reset = useCallback(() => {
+    setImgIdx(0);
+    setImgErr(false);
+    setIsPlaying(false);
+  }, []);
+
+  // Auto-play timer
+  useEffect(() => {
+    if (isPlaying && imageCount > 0) {
+      timerRef.current = setInterval(next, AUTOPLAY_INTERVAL_MS);
+    }
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [isPlaying, next, imageCount]);
+
+  // Keyboard navigation
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'ArrowRight') next();
+      else if (e.key === 'ArrowLeft') prev();
+      else if (e.key === ' ') { e.preventDefault(); setIsPlaying(p => !p); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [next, prev]);
+
+  return { imgIdx, isPlaying, setIsPlaying, imgErr, setImgErr, next, prev, reset };
+}
 
 /* ── Landing Page ── */
 function LandingPage() {
@@ -22,7 +107,7 @@ function LandingPage() {
     try {
       setLoading(true);
       toast.info('Scanning folder structure...');
-      const res = await axios.post(`${API}/drive/folder`, { drive_link: driveLink }, { timeout: 300000 });
+      const res = await axios.post(`${API}/drive/folder`, { drive_link: driveLink }, { timeout: API_TIMEOUT_MS });
       localStorage.setItem('folder_data', JSON.stringify(res.data));
       localStorage.setItem('drive_link', driveLink);
       toast.success(`Found ${res.data.total_images} images in ${res.data.total_folders} folders!`);
@@ -54,6 +139,102 @@ function LandingPage() {
   );
 }
 
+/* ── Sidebar Component ── */
+function Sidebar({ folderData, folders, selectedIdx, onSelectFolder, onRefresh, refreshing, onBack }) {
+  return (
+    <div className="w-72 border-r border-[#E5E5E5] flex flex-col h-full bg-white flex-shrink-0">
+      <div className="p-5 border-b border-[#E5E5E5]">
+        <div className="flex items-center justify-between">
+          <h2 className="font-heading text-lg font-bold text-[#0A0A0A] tracking-tight truncate" data-testid="folder-title">{folderData.folder_name}</h2>
+          <Button data-testid="refresh-button" onClick={onRefresh} disabled={refreshing} variant="ghost" size="icon" className="h-7 w-7 rounded-sm hover:bg-[#F2F2F2] flex-shrink-0" title="Refresh folder data">
+            <ArrowClockwise className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} weight="bold" />
+          </Button>
+        </div>
+        <p className="text-xs text-[#525252] mt-1 font-body">{folders.length} folders</p>
+      </div>
+
+      <ScrollArea className="flex-1" data-testid="folder-tree">
+        <div className="py-2 px-2 space-y-1">
+          {folders.map((folder, idx) => (
+            <div
+              key={folder.path}
+              data-testid={`folder-item-${idx}`}
+              onClick={() => onSelectFolder(idx)}
+              className={`flex items-center gap-2 px-3 py-3 rounded-sm cursor-pointer transition-all duration-150 ${
+                idx === selectedIdx ? 'bg-[#002FA7] text-white' : 'text-[#0A0A0A] hover:bg-[#F2F2F2]'
+              }`}
+            >
+              {idx === selectedIdx
+                ? <FolderOpen className="w-5 h-5 flex-shrink-0" weight="fill" />
+                : <Folder className="w-5 h-5 flex-shrink-0" weight="fill" />}
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-body font-medium truncate">{folder.name}</p>
+                <p className={`text-[11px] ${idx === selectedIdx ? 'text-white/60' : 'text-[#525252]'}`}>
+                  {folder.allImages.length} images
+                  {folder.subfolders.length > 0 && ` / ${folder.subfolders.length} sections`}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </ScrollArea>
+
+      <div className="p-4 border-t border-[#E5E5E5]">
+        <Button data-testid="back-button" onClick={onBack} variant="outline" className="w-full rounded-sm font-body text-sm">
+          <ArrowLeft className="w-4 h-4 mr-2" /> New Folder
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/* ── Image Viewer Component ── */
+function ImageViewer({ images, imgIdx, imgErr, setImgErr, subfolder, currentImg, progress, isPlaying, setIsPlaying, next, prev }) {
+  return (
+    <div className="flex-1 flex flex-col h-full overflow-hidden">
+      <div className="h-1 bg-[#E5E5E5] w-full flex-shrink-0">
+        <div className="h-full bg-[#002FA7] progress-bar" style={{ width: `${progress}%` }} data-testid="progress-bar" />
+      </div>
+
+      <div className="flex-1 relative bg-[#0A0A0A] min-h-0" data-testid="slideshow-container">
+        {images.length === 0 ? (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="text-center">
+              <Folder className="w-12 h-12 text-white/20 mx-auto mb-2" weight="fill" />
+              <p className="text-white/40 font-body text-sm">Select a folder</p>
+            </div>
+          </div>
+        ) : currentImg && (
+          !imgErr ? (
+            <img key={currentImg.id} src={`${API}/drive/image/${currentImg.id}`} alt={currentImg.name} className="absolute inset-0 w-full h-full object-contain slide-image bg-[#0A0A0A]" data-testid="slideshow-image" onError={() => setImgErr(true)} />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center bg-[#111]">
+              <p className="text-white/30 font-body">Failed to load image</p>
+            </div>
+          )
+        )}
+      </div>
+
+      {/* Bottom bar */}
+      <div className="flex-shrink-0 bg-[#0A0A0A] border-t border-[#222] flex items-center justify-between px-4 py-2" data-testid="slideshow-controls">
+        <div className="flex-1 min-w-0 mr-4">
+          <p className="font-body font-medium text-white truncate" style={{ fontSize: '14px' }} data-testid="folder-name-overlay">{subfolder}</p>
+          {currentImg && <p className="font-body text-white/50 truncate" style={{ fontSize: '12px' }}>{currentImg.name}</p>}
+        </div>
+        <div className="flex items-center gap-3 flex-shrink-0">
+          <Button data-testid="previous-button" onClick={prev} variant="ghost" size="icon" className="rounded-sm hover:bg-white/10 h-8 w-8 text-white" disabled={images.length === 0}><CaretLeft className="w-5 h-5" weight="bold" /></Button>
+          <Button data-testid="play-pause-button" onClick={() => setIsPlaying(!isPlaying)} variant="ghost" size="icon" className="rounded-sm hover:bg-white/10 h-8 w-8 text-white" disabled={images.length === 0}>
+            {isPlaying ? <Pause className="w-5 h-5" weight="fill" /> : <Play className="w-5 h-5" weight="fill" />}
+          </Button>
+          <Button data-testid="next-button" onClick={next} variant="ghost" size="icon" className="rounded-sm hover:bg-white/10 h-8 w-8 text-white" disabled={images.length === 0}><CaretRight className="w-5 h-5" weight="bold" /></Button>
+          <div className="h-4 w-px bg-white/20" />
+          <span className="text-xs font-body text-white/70 tabular-nums" data-testid="slide-counter">{images.length > 0 ? `${imgIdx + 1} / ${images.length}` : '0 / 0'}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── Slideshow Page ── */
 function SlideshowPage() {
   const navigate = useNavigate();
@@ -61,55 +242,17 @@ function SlideshowPage() {
   const [folders, setFolders] = useState([]);
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [images, setImages] = useState([]);
-  const [imgIdx, setImgIdx] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [imgErr, setImgErr] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const timerRef = useRef(null);
 
-  const buildFolders = (data) => {
-    const folderMap = {};
-    const folderOrder = [];
+  const slideshow = useSlideshow(images.length);
 
-    data.items.forEach(item => {
-      if (item.type === 'folder') {
-        if (!folderMap[item.path]) {
-          folderMap[item.path] = { name: item.name, path: item.path, images: [], depth: item.path.split('/').length - 1 };
-          folderOrder.push(item.path);
-        }
-      }
-    });
-
-    data.items.forEach(item => {
-      if (item.type === 'image') {
-        const parentPath = item.path.substring(0, item.path.lastIndexOf('/'));
-        if (folderMap[parentPath]) {
-          folderMap[parentPath].images.push(item);
-        }
-      }
-    });
-
-    const folderList = folderOrder.map(p => folderMap[p]).filter(Boolean);
-    const topLevel = folderList.filter(f => f.depth === 0);
-    const enriched = topLevel.map(top => {
-      const allImages = [];
-      folderList.forEach(f => {
-        if (f.path === top.path || f.path.startsWith(top.path + '/')) {
-          allImages.push(...f.images);
-        }
-      });
-      return { ...top, allImages, subfolders: folderList.filter(f => f.path.startsWith(top.path + '/') && f.images.length > 0) };
-    });
-    return enriched;
-  };
-
-  // Build folder list from flat items
+  // Load folder data on mount
   useEffect(() => {
     const raw = localStorage.getItem('folder_data');
     if (!raw) { navigate('/'); return; }
     const data = JSON.parse(raw);
     setFolderData(data);
-    const enriched = buildFolders(data);
+    const enriched = buildFolderTree(data);
     setFolders(enriched);
     if (enriched.length > 0) {
       setImages(enriched[0].allImages);
@@ -117,13 +260,14 @@ function SlideshowPage() {
     }
   }, [navigate]);
 
-  const selectFolder = (idx) => {
+  const selectFolder = useCallback((idx) => {
     setSelectedIdx(idx);
-    setImages(folders[idx]?.allImages || []);
-    setImgIdx(0);
-    setImgErr(false);
-    setIsPlaying(false);
-  };
+    setImages(prev => {
+      const newImages = folders[idx]?.allImages || [];
+      return newImages;
+    });
+    slideshow.reset();
+  }, [folders, slideshow]);
 
   const handleRefresh = async () => {
     const link = localStorage.getItem('drive_link');
@@ -131,137 +275,59 @@ function SlideshowPage() {
     try {
       setRefreshing(true);
       toast.info('Refreshing folder data...');
-      const res = await axios.post(`${API}/drive/folder?refresh=true`, { drive_link: link }, { timeout: 300000 });
+      const res = await axios.post(`${API}/drive/folder?refresh=true`, { drive_link: link }, { timeout: API_TIMEOUT_MS });
       localStorage.setItem('folder_data', JSON.stringify(res.data));
       setFolderData(res.data);
-      const enriched = buildFolders(res.data);
+      const enriched = buildFolderTree(res.data);
       setFolders(enriched);
-      if (enriched.length > 0) { selectFolder(0); }
+      if (enriched.length > 0) {
+        setSelectedIdx(0);
+        setImages(enriched[0].allImages);
+        slideshow.reset();
+      }
       toast.success(`Refreshed! ${res.data.total_images} images in ${res.data.total_folders} folders`);
     } catch (err) {
       toast.error('Refresh failed. Try again.');
     } finally { setRefreshing(false); }
   };
 
-  const next = useCallback(() => {
-    setImgIdx(prev => (prev + 1) % (images.length || 1));
-    setImgErr(false);
-  }, [images.length]);
+  const handleBack = useCallback(() => {
+    localStorage.removeItem('folder_data');
+    navigate('/');
+  }, [navigate]);
 
-  const prev = useCallback(() => {
-    setImgIdx(prev => (prev - 1 + images.length) % (images.length || 1));
-    setImgErr(false);
-  }, [images.length]);
+  if (!folderData) {
+    return <div className="h-screen flex items-center justify-center bg-white"><Spinner className="w-8 h-8 animate-spin text-[#002FA7]" /></div>;
+  }
 
-  useEffect(() => {
-    if (isPlaying && images.length > 0) { timerRef.current = setInterval(next, 5000); }
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [isPlaying, next, images.length]);
-
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === 'ArrowRight') next();
-      else if (e.key === 'ArrowLeft') prev();
-      else if (e.key === ' ') { e.preventDefault(); setIsPlaying(p => !p); }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [next, prev]);
-
-  if (!folderData) return <div className="h-screen flex items-center justify-center bg-white"><Spinner className="w-8 h-8 animate-spin text-[#002FA7]" /></div>;
-
-  const currentImg = images[imgIdx];
-  const progress = images.length > 0 ? ((imgIdx + 1) / images.length) * 100 : 0;
+  const currentImg = images[slideshow.imgIdx];
+  const progress = images.length > 0 ? ((slideshow.imgIdx + 1) / images.length) * 100 : 0;
   const subfolder = currentImg ? currentImg.path.substring(0, currentImg.path.lastIndexOf('/')) : '';
 
   return (
     <div className="h-screen flex overflow-hidden bg-white" data-testid="slideshow-page">
-      {/* Sidebar: Folders */}
-      <div className="w-72 border-r border-[#E5E5E5] flex flex-col h-full bg-white flex-shrink-0">
-        <div className="p-5 border-b border-[#E5E5E5]">
-          <div className="flex items-center justify-between">
-            <h2 className="font-heading text-lg font-bold text-[#0A0A0A] tracking-tight truncate" data-testid="folder-title">{folderData.folder_name}</h2>
-            <Button data-testid="refresh-button" onClick={handleRefresh} disabled={refreshing} variant="ghost" size="icon" className="h-7 w-7 rounded-sm hover:bg-[#F2F2F2] flex-shrink-0" title="Refresh folder data">
-              <ArrowClockwise className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} weight="bold" />
-            </Button>
-          </div>
-          <p className="text-xs text-[#525252] mt-1 font-body">{folders.length} folders</p>
-        </div>
-
-        <ScrollArea className="flex-1" data-testid="folder-tree">
-          <div className="py-2 px-2 space-y-1">
-            {folders.map((folder, idx) => (
-              <div
-                key={folder.path}
-                data-testid={`folder-item-${idx}`}
-                onClick={() => selectFolder(idx)}
-                className={`flex items-center gap-2 px-3 py-3 rounded-sm cursor-pointer transition-all duration-150 ${
-                  idx === selectedIdx
-                    ? 'bg-[#002FA7] text-white'
-                    : 'text-[#0A0A0A] hover:bg-[#F2F2F2]'
-                }`}
-              >
-                {idx === selectedIdx ? (
-                  <FolderOpen className="w-5 h-5 flex-shrink-0" weight="fill" />
-                ) : (
-                  <Folder className="w-5 h-5 flex-shrink-0" weight="fill" />
-                )}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-body font-medium truncate">{folder.name}</p>
-                  <p className={`text-[11px] ${idx === selectedIdx ? 'text-white/60' : 'text-[#525252]'}`}>
-                    {folder.allImages.length} images
-                    {folder.subfolders.length > 0 && ` / ${folder.subfolders.length} sections`}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </ScrollArea>
-
-        <div className="p-4 border-t border-[#E5E5E5]">
-          <Button data-testid="back-button" onClick={() => { localStorage.removeItem('folder_data'); navigate('/'); }} variant="outline" className="w-full rounded-sm font-body text-sm">
-            <ArrowLeft className="w-4 h-4 mr-2" /> New Folder
-          </Button>
-        </div>
-      </div>
-
-      {/* Image Viewer */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden">
-        <div className="h-1 bg-[#E5E5E5] w-full flex-shrink-0">
-          <div className="h-full bg-[#002FA7] progress-bar" style={{ width: `${progress}%` }} data-testid="progress-bar" />
-        </div>
-
-        <div className="flex-1 relative bg-[#0A0A0A] min-h-0" data-testid="slideshow-container">
-          {images.length === 0 ? (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="text-center"><Folder className="w-12 h-12 text-white/20 mx-auto mb-2" weight="fill" /><p className="text-white/40 font-body text-sm">Select a folder</p></div>
-            </div>
-          ) : currentImg && (
-            !imgErr ? (
-              <img key={currentImg.id} src={`${API}/drive/image/${currentImg.id}`} alt={currentImg.name} className="absolute inset-0 w-full h-full object-contain slide-image bg-[#0A0A0A]" data-testid="slideshow-image" onError={() => setImgErr(true)} />
-            ) : (
-              <div className="absolute inset-0 flex items-center justify-center bg-[#111]"><p className="text-white/30 font-body">Failed to load image</p></div>
-            )
-          )}
-        </div>
-
-        {/* Bottom bar */}
-        <div className="flex-shrink-0 bg-[#0A0A0A] border-t border-[#222] flex items-center justify-between px-4 py-2" data-testid="slideshow-controls">
-          <div className="flex-1 min-w-0 mr-4">
-            <p className="font-body font-medium text-white truncate" style={{ fontSize: '14px' }} data-testid="folder-name-overlay">{subfolder}</p>
-            {currentImg && <p className="font-body text-white/50 truncate" style={{ fontSize: '12px' }}>{currentImg.name}</p>}
-          </div>
-          <div className="flex items-center gap-3 flex-shrink-0">
-            <Button data-testid="previous-button" onClick={prev} variant="ghost" size="icon" className="rounded-sm hover:bg-white/10 h-8 w-8 text-white" disabled={images.length === 0}><CaretLeft className="w-5 h-5" weight="bold" /></Button>
-            <Button data-testid="play-pause-button" onClick={() => setIsPlaying(!isPlaying)} variant="ghost" size="icon" className="rounded-sm hover:bg-white/10 h-8 w-8 text-white" disabled={images.length === 0}>
-              {isPlaying ? <Pause className="w-5 h-5" weight="fill" /> : <Play className="w-5 h-5" weight="fill" />}
-            </Button>
-            <Button data-testid="next-button" onClick={next} variant="ghost" size="icon" className="rounded-sm hover:bg-white/10 h-8 w-8 text-white" disabled={images.length === 0}><CaretRight className="w-5 h-5" weight="bold" /></Button>
-            <div className="h-4 w-px bg-white/20" />
-            <span className="text-xs font-body text-white/70 tabular-nums" data-testid="slide-counter">{images.length > 0 ? `${imgIdx + 1} / ${images.length}` : '0 / 0'}</span>
-          </div>
-        </div>
-      </div>
+      <Sidebar
+        folderData={folderData}
+        folders={folders}
+        selectedIdx={selectedIdx}
+        onSelectFolder={selectFolder}
+        onRefresh={handleRefresh}
+        refreshing={refreshing}
+        onBack={handleBack}
+      />
+      <ImageViewer
+        images={images}
+        imgIdx={slideshow.imgIdx}
+        imgErr={slideshow.imgErr}
+        setImgErr={slideshow.setImgErr}
+        subfolder={subfolder}
+        currentImg={currentImg}
+        progress={progress}
+        isPlaying={slideshow.isPlaying}
+        setIsPlaying={slideshow.setIsPlaying}
+        next={slideshow.next}
+        prev={slideshow.prev}
+      />
     </div>
   );
 }

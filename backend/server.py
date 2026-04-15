@@ -30,7 +30,10 @@ logger = logging.getLogger(__name__)
 executor = ThreadPoolExecutor(max_workers=15)
 
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg', '.tiff', '.heic', '.heif'}
+CACHE_TTL_SECONDS = 300  # 5 minutes
 
+
+# ── Models ──
 
 class DriveLinkRequest(BaseModel):
     drive_link: str
@@ -49,7 +52,10 @@ class FolderStructureResponse(BaseModel):
     total_folders: int
 
 
+# ── Helpers ──
+
 def extract_folder_id(drive_link: str) -> str:
+    """Extract folder ID from various Google Drive link formats."""
     patterns = [
         r'folders/([a-zA-Z0-9-_]+)',
         r'id=([a-zA-Z0-9-_]+)',
@@ -69,7 +75,7 @@ def is_image_file(name: str) -> bool:
 
 
 def fetch_folder_entries(folder_id: str):
-    """Fetch entries from a public Google Drive folder"""
+    """Fetch entries from a public Google Drive folder via embedded view."""
     url = f'https://drive.google.com/embeddedfolderview?id={folder_id}'
     resp = http_requests.get(url, timeout=15)
     if resp.status_code != 200:
@@ -84,164 +90,157 @@ def fetch_folder_entries(folder_id: str):
     return [{"id": eid, "name": etitle} for eid, etitle in zip(entry_ids, entry_titles)], folder_name
 
 
-def scan_folder_parallel(folder_id, folder_name_prefix, parent_folder):
-    """Scan a single folder and return its items (images + subfolder entries)"""
-    entries, _ = fetch_folder_entries(folder_id)
+def classify_entries(entries, path_prefix, parent_folder):
+    """Classify a list of entries into FolderItems and subfolder references."""
     items = []
     subfolders = []
-
     for entry in entries:
-        item_path = f"{folder_name_prefix}/{entry['name']}" if folder_name_prefix else entry['name']
+        item_path = f"{path_prefix}/{entry['name']}" if path_prefix else entry['name']
         if is_image_file(entry['name']):
-            items.append(FolderItem(
-                id=entry["id"], name=entry["name"], type='image',
-                path=item_path, parent_folder=parent_folder
-            ))
+            items.append(FolderItem(id=entry["id"], name=entry["name"], type='image', path=item_path, parent_folder=parent_folder))
         else:
-            # Assume non-image entries are folders
-            items.append(FolderItem(
-                id=entry["id"], name=entry["name"], type='folder',
-                path=item_path, parent_folder=parent_folder
-            ))
+            items.append(FolderItem(id=entry["id"], name=entry["name"], type='folder', path=item_path, parent_folder=parent_folder))
             subfolders.append((entry["id"], entry["name"], item_path))
-
     return items, subfolders
 
 
+def scan_folder(folder_id, path_prefix, parent_folder):
+    """Scan a single folder: fetch entries and classify them."""
+    entries, _ = fetch_folder_entries(folder_id)
+    return classify_entries(entries, path_prefix, parent_folder)
+
+
+def scan_level_parallel(queue):
+    """Scan a list of folders in parallel. Returns dict: folder_id -> (items, subfolders)."""
+    results = {}
+    if not queue:
+        return results
+
+    futures = {}
+    for fid, _fname, fpath, *_rest in queue:
+        future = executor.submit(scan_folder, fid, fpath, fpath)
+        futures[future] = fid
+
+    for future in as_completed(futures):
+        fid = futures[future]
+        try:
+            results[fid] = future.result()
+        except Exception as e:
+            logger.error(f"Error scanning folder {fid}: {e}")
+            results[fid] = ([], [])
+
+    return results
+
+
+def assemble_folder_tree(top_folders, folder_name, level2, level3, level4):
+    """Assemble flat item list in correct folder order from scan results."""
+    all_items = []
+
+    for folder_entry in top_folders:
+        fid = folder_entry["id"]
+        all_items.append(FolderItem(id=fid, name=folder_entry["name"], type='folder', path=folder_entry["name"], parent_folder=folder_name))
+
+        if fid not in level2:
+            continue
+
+        l2_items, _ = level2[fid]
+        l2_images = [i for i in l2_items if i.type == 'image']
+        l2_folders = [i for i in l2_items if i.type == 'folder']
+
+        for sf in l2_folders:
+            all_items.append(sf)
+            if sf.id in level3:
+                l3_items, _ = level3[sf.id]
+                l3_images = [i for i in l3_items if i.type == 'image']
+                l3_folders = [i for i in l3_items if i.type == 'folder']
+                for l3f in l3_folders:
+                    all_items.append(l3f)
+                    if l3f.id in level4:
+                        all_items.extend(level4[l3f.id])
+                all_items.extend(l3_images)
+
+        all_items.extend(l2_images)
+
+    return all_items
+
+
 def fetch_all_recursive(folder_id, max_depth=4):
-    """Fetch entire folder tree using parallel HTTP requests, preserving folder order"""
+    """Fetch entire folder tree using parallel HTTP requests, preserving folder order."""
     entries, folder_name = fetch_folder_entries(folder_id)
 
-    # Level 1: classify top-level entries, preserving original order
     top_images = []
-    top_folders = []  # preserves order from Google Drive
+    top_folders = []
     for entry in entries:
         if is_image_file(entry['name']):
-            top_images.append(FolderItem(
-                id=entry["id"], name=entry["name"], type='image',
-                path=entry["name"], parent_folder=folder_name
-            ))
+            top_images.append(FolderItem(id=entry["id"], name=entry["name"], type='image', path=entry["name"], parent_folder=folder_name))
         else:
             top_folders.append(entry)
 
     if max_depth <= 1:
-        all_items = []
+        shallow = [FolderItem(id=f["id"], name=f["name"], type='folder', path=f["name"], parent_folder=folder_name) for f in top_folders]
+        return shallow + top_images, folder_name
+
+    # Level 2
+    l2_queue = [(f["id"], f["name"], f["name"], None) for f in top_folders]
+    level2 = scan_level_parallel(l2_queue)
+
+    # Level 3
+    l3_queue = []
+    if max_depth > 2:
         for f in top_folders:
-            all_items.append(FolderItem(id=f["id"], name=f["name"], type='folder', path=f["name"], parent_folder=folder_name))
-        all_items.extend(top_images)
-        return all_items, folder_name
+            if f["id"] in level2:
+                _, subs = level2[f["id"]]
+                l3_queue.extend([(sid, sn, sp, f["id"]) for sid, sn, sp in subs])
+    level3 = scan_level_parallel(l3_queue)
 
-    # Level 2: scan all top-level folders in parallel, but collect results per folder
-    level2_futures = {}
-    for folder_entry in top_folders:
-        future = executor.submit(scan_folder_parallel, folder_entry["id"], folder_entry["name"], folder_entry["name"])
-        level2_futures[future] = folder_entry["id"]
+    # Level 4
+    l4_queue = []
+    if max_depth > 3:
+        for sid, _sn, sp, _parent in l3_queue:
+            if sid in level3:
+                _, subs = level3[sid]
+                l4_queue.extend([(ssid, ssn, ssp, sid) for ssid, ssn, ssp in subs])
+    level4_raw = scan_level_parallel(l4_queue)
+    level4 = {fid: items for fid, (items, _) in level4_raw.items()}
 
-    # Collect results keyed by folder ID
-    level2_results = {}
-    for future in as_completed(level2_futures):
-        fid = level2_futures[future]
-        try:
-            items, subfolders = future.result()
-            level2_results[fid] = (items, subfolders)
-        except Exception as e:
-            logger.error(f"Error scanning folder: {e}")
-            level2_results[fid] = ([], [])
-
-    # Level 3: collect all subfolders and scan in parallel
-    level3_queue = []  # (folder_id, folder_name, path, top_folder_id)
-    for folder_entry in top_folders:
-        fid = folder_entry["id"]
-        if fid in level2_results:
-            _, subfolders = level2_results[fid]
-            for sf_id, sf_name, sf_path in subfolders:
-                level3_queue.append((sf_id, sf_name, sf_path, fid))
-
-    level3_results = {}
-    if max_depth > 2 and level3_queue:
-        level3_futures = {}
-        for sf_id, sf_name, sf_path, top_fid in level3_queue:
-            future = executor.submit(scan_folder_parallel, sf_id, sf_path, sf_path)
-            level3_futures[future] = (sf_id, top_fid)
-
-        for future in as_completed(level3_futures):
-            sf_id, top_fid = level3_futures[future]
-            try:
-                items, subfolders = future.result()
-                level3_results[sf_id] = (items, subfolders)
-            except Exception as e:
-                level3_results[sf_id] = ([], [])
-
-    # Level 4: go one more level deep
-    level4_queue = []
-    for sf_id, sf_name, sf_path, top_fid in level3_queue:
-        if sf_id in level3_results:
-            _, subfolders = level3_results[sf_id]
-            for ssf_id, ssf_name, ssf_path in subfolders:
-                level4_queue.append((ssf_id, ssf_name, ssf_path, sf_id))
-
-    level4_results = {}
-    if max_depth > 3 and level4_queue:
-        level4_futures = {}
-        for ssf_id, ssf_name, ssf_path, parent_sf_id in level4_queue:
-            future = executor.submit(scan_folder_parallel, ssf_id, ssf_path, ssf_path)
-            level4_futures[future] = ssf_id
-
-        for future in as_completed(level4_futures):
-            ssf_id = level4_futures[future]
-            try:
-                items, _ = future.result()
-                level4_results[ssf_id] = items
-            except:
-                level4_results[ssf_id] = []
-
-    # ASSEMBLE in correct order: iterate top folders in original order
-    all_items = []
-    for folder_entry in top_folders:
-        fid = folder_entry["id"]
-        folder_path = folder_entry["name"]
-
-        # Add the top-level folder item
-        all_items.append(FolderItem(
-            id=fid, name=folder_entry["name"], type='folder',
-            path=folder_path, parent_folder=folder_name
-        ))
-
-        if fid not in level2_results:
-            continue
-
-        level2_items, level2_subfolders = level2_results[fid]
-
-        # Separate sub-images and sub-folders from level 2
-        l2_images = [i for i in level2_items if i.type == 'image']
-        l2_folders = [i for i in level2_items if i.type == 'folder']
-
-        # For each subfolder in level 2 (in order), add folder + its images
-        for sf_item in l2_folders:
-            all_items.append(sf_item)  # Add subfolder header
-
-            # Add level 3 items for this subfolder
-            if sf_item.id in level3_results:
-                l3_items, l3_subfolders = level3_results[sf_item.id]
-                l3_images = [i for i in l3_items if i.type == 'image']
-                l3_folders = [i for i in l3_items if i.type == 'folder']
-
-                for l3f in l3_folders:
-                    all_items.append(l3f)
-                    # Add level 4 items
-                    if l3f.id in level4_results:
-                        all_items.extend(level4_results[l3f.id])
-
-                all_items.extend(l3_images)
-
-        # Add direct images of this top folder last
-        all_items.extend(l2_images)
-
-    # Add any root-level images at the end
+    all_items = assemble_folder_tree(top_folders, folder_name, level2, level3, level4)
     all_items.extend(top_images)
 
     return all_items, folder_name
 
+
+# ── Cache helpers ──
+
+async def get_cached_result(folder_id):
+    """Return cached folder data if fresh enough, else None."""
+    cached = await db.folder_cache.find_one({"folder_id": folder_id}, {"_id": 0})
+    if not cached or not cached.get("created_at"):
+        return None
+    try:
+        cached_time = datetime.fromisoformat(cached["created_at"])
+        age = (datetime.now(timezone.utc) - cached_time).total_seconds()
+        if age < CACHE_TTL_SECONDS:
+            logger.info(f"Cache hit for '{cached['folder_name']}' (age: {int(age)}s)")
+            return cached
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
+async def store_cache(folder_id, folder_name, items, total_images, total_folders):
+    """Store scan result in MongoDB cache."""
+    doc = {
+        "folder_id": folder_id,
+        "folder_name": folder_name,
+        "items": [item.model_dump() for item in items],
+        "total_images": total_images,
+        "total_folders": total_folders,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.folder_cache.update_one({"folder_id": folder_id}, {"$set": doc}, upsert=True)
+
+
+# ── Routes ──
 
 @api_router.get("/")
 async def root():
@@ -253,54 +252,29 @@ async def get_folder_structure(request: DriveLinkRequest, refresh: bool = False)
     """Get folder structure from a public Drive link. Use refresh=true to force re-scan."""
     try:
         folder_id = extract_folder_id(request.drive_link)
-        logger.info(f"Fetching folder structure for ID: {folder_id}, refresh={refresh}")
+        logger.info(f"Fetching folder ID: {folder_id}, refresh={refresh}")
 
-        # Use cache if available and not forcing refresh (cache valid for 5 min)
         if not refresh:
-            cached = await db.folder_cache.find_one({"folder_id": folder_id}, {"_id": 0})
-            if cached and cached.get("created_at"):
-                from datetime import datetime as dt
-                try:
-                    cached_time = dt.fromisoformat(cached["created_at"])
-                    age_seconds = (datetime.now(timezone.utc) - cached_time).total_seconds()
-                    if age_seconds < 300:  # 5 minute cache
-                        logger.info(f"Returning cached result for '{cached['folder_name']}' (age: {int(age_seconds)}s)")
-                        return cached
-                except:
-                    pass
+            cached = await get_cached_result(folder_id)
+            if cached:
+                return cached
 
-        # Fresh scan
         items, folder_name = fetch_all_recursive(folder_id)
 
         if not items:
-            raise HTTPException(
-                status_code=400,
-                detail="No content found. Make sure the folder is shared publicly and contains files."
-            )
+            raise HTTPException(status_code=400, detail="No content found. Make sure the folder is shared publicly.")
 
         total_images = sum(1 for i in items if i.type == 'image')
         total_folders = sum(1 for i in items if i.type == 'folder')
-
         logger.info(f"Found {total_images} images and {total_folders} folders in '{folder_name}'")
 
-        result = {
-            "folder_id": folder_id,
-            "folder_name": folder_name,
-            "items": [item.model_dump() for item in items],
-            "total_images": total_images,
-            "total_folders": total_folders,
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        await db.folder_cache.update_one(
-            {"folder_id": folder_id}, {"$set": result}, upsert=True
-        )
+        await store_cache(folder_id, folder_name, items, total_images, total_folders)
 
-        return FolderStructureResponse(
-            items=items, folder_name=folder_name,
-            total_images=total_images, total_folders=total_folders
-        )
+        return FolderStructureResponse(items=items, folder_name=folder_name, total_images=total_images, total_folders=total_folders)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching folder: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Error: {str(e)}. Make sure the folder is shared publicly.")
@@ -308,14 +282,14 @@ async def get_folder_structure(request: DriveLinkRequest, refresh: bool = False)
 
 @api_router.delete("/drive/cache/{folder_id}")
 async def clear_cache(folder_id: str):
-    """Clear cached folder data to force re-scan"""
+    """Clear cached folder data to force re-scan."""
     await db.folder_cache.delete_one({"folder_id": folder_id})
     return {"message": "Cache cleared"}
 
 
 @api_router.get("/drive/image/{file_id}")
 async def get_drive_image(file_id: str):
-    """Proxy image from public Google Drive"""
+    """Proxy image from public Google Drive."""
     try:
         thumb_url = f'https://drive.google.com/thumbnail?id={file_id}&sz=w1920'
         resp = http_requests.get(thumb_url, timeout=15, allow_redirects=True)
@@ -339,6 +313,8 @@ async def get_drive_image(file_id: str):
         logger.error(f"Error fetching image {file_id}: {str(e)}")
         raise HTTPException(status_code=404, detail=f"Image not found: {str(e)}")
 
+
+# ── App setup ──
 
 app.include_router(api_router)
 

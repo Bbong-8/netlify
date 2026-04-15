@@ -2,16 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import '@/App.css';
-import {
-  Play,
-  Pause,
-  CaretLeft,
-  CaretRight,
-  Folder,
-  Image as ImageIcon,
-  ArrowLeft,
-  Spinner
-} from '@phosphor-icons/react';
+import { Play, Pause, CaretLeft, CaretRight, Folder, FolderOpen, ArrowLeft, Spinner } from '@phosphor-icons/react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -20,414 +11,245 @@ import { toast } from 'sonner';
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-const FALLBACK_IMAGES = [
-  "https://images.unsplash.com/photo-1567010375323-647e954af519?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2OTV8MHwxfHNlYXJjaHwyfHx3aGl0ZSUyMG1pbmltYWxpc3QlMjB0ZXh0dXJlfGVufDB8fHx3aGl0ZXwxNzc2MjI0ODg5fDA&ixlib=rb-4.1.0&q=85",
-  "https://images.unsplash.com/photo-1584610559454-14c70cd3b869?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA6OTV8MHwxfHNlYXJjaHwzfHx3aGl0ZSUyMG1pbmltYWxpc3QlMjB0ZXh0dXJlfGVufDB8fHx3aGl0ZXwxNzc2MjI0ODg5fDA&ixlib=rb-4.1.0&q=85",
-  "https://images.unsplash.com/photo-1627810872480-ed5d132a77a9?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2OTV8MHwxfHNlYXJjaHw0fHx3aGl0ZSUyMG1pbmltYWxpc3QlMjB0ZXh0dXJlfGVufDB8fHx3aGl0ZXwxNzc2MjI0ODg5fDA&ixlib=rb-4.1.0&q=85",
-  "https://images.unsplash.com/photo-1548685913-fe6678babe8d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2OTV8MHwxfHNlYXJjaHwxfHx3aGl0ZSUyMG1pbmltYWxpc3QlMjB0ZXh0dXJlfGVufDB8fHx3aGl0ZXwxNzc2MjI0ODg5fDA&ixlib=rb-4.1.0&q=85"
-];
-
-const LandingPage = () => {
+/* ── Landing Page ── */
+function LandingPage() {
   const navigate = useNavigate();
   const [driveLink, setDriveLink] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleLoadFolder = async () => {
-    if (!driveLink.trim()) {
-      toast.error('Please enter a Google Drive folder link');
-      return;
-    }
-
+  const handleLoad = async () => {
+    if (!driveLink.trim()) { toast.error('Please enter a Google Drive folder link'); return; }
     try {
       setLoading(true);
-      toast.info('Scanning folder structure... This may take a moment.');
-
-      const response = await axios.post(`${API}/drive/folder`, {
-        drive_link: driveLink
-      });
-
-      localStorage.setItem('folder_data', JSON.stringify(response.data));
-      localStorage.setItem('drive_link', driveLink);
-
-      toast.success(`Found ${response.data.total_images} images in ${response.data.total_folders} folders!`);
+      toast.info('Scanning folder structure...');
+      const res = await axios.post(`${API}/drive/folder`, { drive_link: driveLink });
+      localStorage.setItem('folder_data', JSON.stringify(res.data));
+      toast.success(`Found ${res.data.total_images} images in ${res.data.total_folders} folders!`);
       navigate('/slideshow');
-    } catch (error) {
-      console.error('Folder fetch error:', error);
-      toast.error(error.response?.data?.detail || 'Failed to access folder. Make sure it\'s shared publicly.');
-    } finally {
-      setLoading(false);
-    }
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to access folder.");
+    } finally { setLoading(false); }
   };
 
   return (
     <div className="min-h-screen bg-white flex items-center justify-center p-6" data-testid="landing-page">
       <div className="max-w-2xl w-full space-y-8">
-        {/* Header */}
         <div className="text-center space-y-4">
-          <h1
-            className="font-heading text-4xl sm:text-5xl lg:text-6xl tracking-tighter font-black text-[#0A0A0A]"
-            data-testid="landing-title"
-          >
-            Drive Slideshow
-          </h1>
-          <p className="text-base leading-relaxed text-[#525252] max-w-xl mx-auto" data-testid="landing-subtitle">
-            Paste your Google Drive folder link to view all images as a beautiful slideshow with folder names overlaid.
-          </p>
+          <h1 className="font-heading text-4xl sm:text-5xl lg:text-6xl tracking-tighter font-black text-[#0A0A0A]" data-testid="landing-title">Drive Slideshow</h1>
+          <p className="text-base leading-relaxed text-[#525252] max-w-xl mx-auto" data-testid="landing-subtitle">Paste your Google Drive folder link to browse folders and view images.</p>
         </div>
-
-        {/* Main Card */}
-        <div className="bg-[#F2F2F2] border border-[#E5E5E5] p-8 space-y-6">
-          <div className="space-y-3">
-            <label className="text-xs uppercase tracking-[0.2em] font-bold text-[#0A0A0A]" data-testid="link-label">
-              Google Drive Folder Link
-            </label>
-            <div className="flex gap-2">
-              <Input
-                data-testid="drive-link-input"
-                type="text"
-                placeholder="https://drive.google.com/drive/folders/..."
-                value={driveLink}
-                onChange={(e) => setDriveLink(e.target.value)}
-                className="flex-1 rounded-sm border-[#E5E5E5] focus:border-[#0A0A0A] focus:ring-1 focus:ring-[#0A0A0A] font-body"
-                onKeyDown={(e) => e.key === 'Enter' && !loading && handleLoadFolder()}
-                disabled={loading}
-              />
-              <Button
-                data-testid="load-folder-button"
-                onClick={handleLoadFolder}
-                disabled={loading}
-                className="bg-[#002FA7] text-white hover:bg-[#002FA7]/90 rounded-sm px-6 font-body min-w-[120px]"
-              >
-                {loading ? (
-                  <span className="flex items-center gap-2">
-                    <Spinner className="w-4 h-4 animate-spin" />
-                    Scanning...
-                  </span>
-                ) : (
-                  'Load'
-                )}
-              </Button>
-            </div>
-            <p className="text-xs text-[#525252] font-body">
-              The folder must be shared publicly (Anyone with the link can view)
-            </p>
+        <div className="bg-[#F2F2F2] border border-[#E5E5E5] p-8 space-y-4">
+          <label className="text-xs uppercase tracking-[0.2em] font-bold text-[#0A0A0A]" data-testid="link-label">Google Drive Folder Link</label>
+          <div className="flex gap-2">
+            <Input data-testid="drive-link-input" placeholder="https://drive.google.com/drive/folders/..." value={driveLink} onChange={(e) => setDriveLink(e.target.value)} className="flex-1 rounded-sm border-[#E5E5E5] focus:border-[#0A0A0A] focus:ring-1 focus:ring-[#0A0A0A] font-body" onKeyDown={(e) => e.key === 'Enter' && !loading && handleLoad()} disabled={loading} />
+            <Button data-testid="load-folder-button" onClick={handleLoad} disabled={loading} className="bg-[#002FA7] text-white hover:bg-[#002FA7]/90 rounded-sm px-6 font-body min-w-[120px]">
+              {loading ? <Spinner className="w-4 h-4 animate-spin" /> : 'Load'}
+            </Button>
           </div>
-        </div>
-
-        {/* Footer */}
-        <div className="text-center">
-          <p className="text-xs text-[#525252] font-body">
-            We only read your public folder structure. No sign-in required.
-          </p>
+          <p className="text-xs text-[#525252] font-body">Folder must be shared publicly (Anyone with the link)</p>
         </div>
       </div>
     </div>
   );
-};
+}
 
-const SlideshowPage = () => {
+/* ── Slideshow Page ── */
+function SlideshowPage() {
   const navigate = useNavigate();
   const [folderData, setFolderData] = useState(null);
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [folders, setFolders] = useState([]);
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  const [images, setImages] = useState([]);
+  const [imgIdx, setImgIdx] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [imageError, setImageError] = useState(false);
-  const intervalRef = useRef(null);
+  const [imgErr, setImgErr] = useState(false);
+  const timerRef = useRef(null);
 
+  // Build folder list from flat items
   useEffect(() => {
-    const storedData = localStorage.getItem('folder_data');
-    if (!storedData) {
-      navigate('/');
-      return;
-    }
-    setFolderData(JSON.parse(storedData));
-  }, [navigate]);
+    const raw = localStorage.getItem('folder_data');
+    if (!raw) { navigate('/'); return; }
+    const data = JSON.parse(raw);
+    setFolderData(data);
 
-  const getAllSlideItems = useCallback(() => {
-    if (!folderData) return [];
+    // Build a map of folder path -> images
+    const folderMap = {};
+    const folderOrder = [];
 
-    const items = [];
-
-    // Walk through items in the order backend provides (already sorted by folder)
-    // Keep images as slides, skip folders that have child images (they're just headers)
-    folderData.items.forEach(item => {
-      if (item.type === 'image') {
-        const folderPath = item.path.substring(0, item.path.lastIndexOf('/')) || folderData.folder_name;
-        items.push({
-          ...item,
-          folderName: folderPath
-        });
-      } else if (item.type === 'folder') {
-        // Check if this folder has any images under it
-        const hasImages = folderData.items.some(
-          i => i.type === 'image' && i.path.startsWith(item.path + '/')
-        );
-        if (!hasImages) {
-          items.push({
-            ...item,
-            folderName: item.path,
-            isEmptyFolder: true
-          });
+    data.items.forEach(item => {
+      if (item.type === 'folder') {
+        if (!folderMap[item.path]) {
+          folderMap[item.path] = { name: item.name, path: item.path, images: [], depth: item.path.split('/').length - 1 };
+          folderOrder.push(item.path);
         }
       }
     });
 
-    return items;
-  }, [folderData]);
-
-  const allItems = getAllSlideItems();
-
-  const handleNext = useCallback(() => {
-    setCurrentIndex((prev) => (prev + 1) % allItems.length);
-    setImageError(false);
-  }, [allItems.length]);
-
-  const handlePrevious = useCallback(() => {
-    setCurrentIndex((prev) => (prev - 1 + allItems.length) % allItems.length);
-    setImageError(false);
-  }, [allItems.length]);
-
-  // Auto-play
-  useEffect(() => {
-    if (isPlaying && allItems.length > 0) {
-      intervalRef.current = setInterval(() => {
-        handleNext();
-      }, 5000);
-    }
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [isPlaying, handleNext, allItems.length]);
-
-  // Keyboard navigation
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.key === 'ArrowRight') handleNext();
-      else if (e.key === 'ArrowLeft') handlePrevious();
-      else if (e.key === ' ') {
-        e.preventDefault();
-        setIsPlaying(prev => !prev);
+    data.items.forEach(item => {
+      if (item.type === 'image') {
+        const parentPath = item.path.substring(0, item.path.lastIndexOf('/'));
+        if (folderMap[parentPath]) {
+          folderMap[parentPath].images.push(item);
+        }
       }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleNext, handlePrevious]);
+    });
 
-  const getImageUrl = (item) => {
-    if (item?.isEmptyFolder) {
-      return FALLBACK_IMAGES[currentIndex % FALLBACK_IMAGES.length];
+    // Keep only folders that have images (directly or via sub)
+    // Also compute total images including sub-folders
+    const folderList = folderOrder.map(p => folderMap[p]).filter(Boolean);
+
+    // For each top-level folder, gather all images from sub-folders too
+    const topLevel = folderList.filter(f => f.depth === 0);
+    const enriched = topLevel.map(top => {
+      const allImages = [];
+      folderList.forEach(f => {
+        if (f.path === top.path || f.path.startsWith(top.path + '/')) {
+          allImages.push(...f.images);
+        }
+      });
+      return { ...top, allImages, subfolders: folderList.filter(f => f.path.startsWith(top.path + '/') && f.images.length > 0) };
+    });
+
+    setFolders(enriched);
+    if (enriched.length > 0) {
+      setImages(enriched[0].allImages);
+      setSelectedIdx(0);
     }
-    return `${API}/drive/image/${item?.id}`;
+  }, [navigate]);
+
+  const selectFolder = (idx) => {
+    setSelectedIdx(idx);
+    setImages(folders[idx]?.allImages || []);
+    setImgIdx(0);
+    setImgErr(false);
+    setIsPlaying(false);
   };
 
-  const handleGoBack = () => {
-    localStorage.removeItem('folder_data');
-    navigate('/');
-  };
+  const next = useCallback(() => {
+    setImgIdx(prev => (prev + 1) % (images.length || 1));
+    setImgErr(false);
+  }, [images.length]);
 
-  if (!folderData) {
-    return (
-      <div className="h-screen flex items-center justify-center bg-white">
-        <Spinner className="w-8 h-8 animate-spin text-[#002FA7]" />
-      </div>
-    );
-  }
+  const prev = useCallback(() => {
+    setImgIdx(prev => (prev - 1 + images.length) % (images.length || 1));
+    setImgErr(false);
+  }, [images.length]);
 
-  if (allItems.length === 0) {
-    return (
-      <div className="h-screen flex items-center justify-center bg-white" data-testid="empty-state">
-        <div className="text-center space-y-4">
-          <h2 className="font-heading text-2xl font-bold text-[#0A0A0A]">No images found</h2>
-          <p className="text-[#525252] font-body">This folder doesn't contain any images.</p>
-          <Button onClick={handleGoBack} className="bg-[#002FA7] text-white rounded-sm">
-            Go Back
-          </Button>
-        </div>
-      </div>
-    );
-  }
+  useEffect(() => {
+    if (isPlaying && images.length > 0) { timerRef.current = setInterval(next, 5000); }
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [isPlaying, next, images.length]);
 
-  const currentSlide = allItems[currentIndex];
-  const progressPercent = ((currentIndex + 1) / allItems.length) * 100;
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'ArrowRight') next();
+      else if (e.key === 'ArrowLeft') prev();
+      else if (e.key === ' ') { e.preventDefault(); setIsPlaying(p => !p); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [next, prev]);
+
+  if (!folderData) return <div className="h-screen flex items-center justify-center bg-white"><Spinner className="w-8 h-8 animate-spin text-[#002FA7]" /></div>;
+
+  const currentImg = images[imgIdx];
+  const progress = images.length > 0 ? ((imgIdx + 1) / images.length) * 100 : 0;
+  const subfolder = currentImg ? currentImg.path.substring(0, currentImg.path.lastIndexOf('/')) : '';
 
   return (
     <div className="h-screen flex overflow-hidden bg-white" data-testid="slideshow-page">
-      {/* Sidebar */}
+      {/* Sidebar: Folders */}
       <div className="w-72 border-r border-[#E5E5E5] flex flex-col h-full bg-white flex-shrink-0">
-        {/* Header */}
-        <div className="p-6 border-b border-[#E5E5E5]">
-          <h2
-            className="font-heading text-xl font-bold text-[#0A0A0A] tracking-tight truncate"
-            data-testid="folder-title"
-            title={folderData.folder_name}
-          >
-            {folderData.folder_name}
-          </h2>
-          <p className="text-xs text-[#525252] mt-1 font-body">
-            {folderData.total_images} images / {folderData.total_folders} folders
-          </p>
+        <div className="p-5 border-b border-[#E5E5E5]">
+          <h2 className="font-heading text-lg font-bold text-[#0A0A0A] tracking-tight truncate" data-testid="folder-title">{folderData.folder_name}</h2>
+          <p className="text-xs text-[#525252] mt-1 font-body">{folders.length} folders</p>
         </div>
 
-        {/* Folder Tree */}
         <ScrollArea className="flex-1" data-testid="folder-tree">
-          <div className="p-3 space-y-0.5">
-            {allItems.map((item, index) => (
+          <div className="py-2 px-2 space-y-1">
+            {folders.map((folder, idx) => (
               <div
-                key={`${item.id}-${index}`}
-                data-testid={`folder-item-${index}`}
-                onClick={() => {
-                  setCurrentIndex(index);
-                  setImageError(false);
-                }}
-                className={`px-3 py-2.5 rounded-sm cursor-pointer transition-all duration-200 ${
-                  index === currentIndex
-                    ? 'bg-[#F2F2F2] text-[#0A0A0A] font-medium'
-                    : 'text-[#525252] hover:bg-[#F2F2F2]/50'
+                key={folder.path}
+                data-testid={`folder-item-${idx}`}
+                onClick={() => selectFolder(idx)}
+                className={`flex items-center gap-2 px-3 py-3 rounded-sm cursor-pointer transition-all duration-150 ${
+                  idx === selectedIdx
+                    ? 'bg-[#002FA7] text-white'
+                    : 'text-[#0A0A0A] hover:bg-[#F2F2F2]'
                 }`}
               >
-                <div className="flex items-center gap-2">
-                  {item.type === 'folder' || item.isEmptyFolder ? (
-                    <Folder className="w-4 h-4 flex-shrink-0 text-[#002FA7]" weight="fill" />
-                  ) : (
-                    <ImageIcon className="w-4 h-4 flex-shrink-0" weight="fill" />
-                  )}
-                  <span className="text-xs font-body truncate" title={item.folderName || item.name}>
-                    {item.name}
-                  </span>
-                </div>
-                {(item.folderName || item.parent_folder) && (
-                  <p className="text-[10px] text-[#525252]/70 mt-0.5 ml-6 truncate">
-                    {item.folderName || item.parent_folder}
-                  </p>
+                {idx === selectedIdx ? (
+                  <FolderOpen className="w-5 h-5 flex-shrink-0" weight="fill" />
+                ) : (
+                  <Folder className="w-5 h-5 flex-shrink-0" weight="fill" />
                 )}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-body font-medium truncate">{folder.name}</p>
+                  <p className={`text-[11px] ${idx === selectedIdx ? 'text-white/60' : 'text-[#525252]'}`}>
+                    {folder.allImages.length} images
+                    {folder.subfolders.length > 0 && ` / ${folder.subfolders.length} sections`}
+                  </p>
+                </div>
               </div>
             ))}
           </div>
         </ScrollArea>
 
-        {/* Back Button */}
         <div className="p-4 border-t border-[#E5E5E5]">
-          <Button
-            data-testid="back-button"
-            onClick={handleGoBack}
-            variant="outline"
-            className="w-full rounded-sm font-body text-sm"
-          >
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            New Folder
+          <Button data-testid="back-button" onClick={() => { localStorage.removeItem('folder_data'); navigate('/'); }} variant="outline" className="w-full rounded-sm font-body text-sm">
+            <ArrowLeft className="w-4 h-4 mr-2" /> New Folder
           </Button>
         </div>
       </div>
 
-      {/* Main Slideshow Area */}
+      {/* Image Viewer */}
       <div className="flex-1 flex flex-col h-full overflow-hidden">
-        {/* Progress Bar */}
         <div className="h-1 bg-[#E5E5E5] w-full flex-shrink-0">
-          <div
-            className="h-full bg-[#002FA7] progress-bar"
-            style={{ width: `${progressPercent}%` }}
-            data-testid="progress-bar"
-          ></div>
+          <div className="h-full bg-[#002FA7] progress-bar" style={{ width: `${progress}%` }} data-testid="progress-bar" />
         </div>
 
-        {/* Image Container - takes all remaining space */}
         <div className="flex-1 relative bg-[#0A0A0A] min-h-0" data-testid="slideshow-container">
-          {currentSlide && (
-            <>
-              {!imageError ? (
-                <img
-                  key={currentSlide.id + '-' + currentIndex}
-                  src={getImageUrl(currentSlide)}
-                  alt={currentSlide.folderName || currentSlide.name}
-                  className="absolute inset-0 w-full h-full object-contain slide-image bg-[#0A0A0A]"
-                  data-testid="slideshow-image"
-                  onError={() => setImageError(true)}
-                />
-              ) : (
-                <div className="absolute inset-0 flex items-center justify-center bg-[#F2F2F2]">
-                  <ImageIcon className="w-16 h-16 text-[#E5E5E5]" />
-                </div>
-              )}
-            </>
+          {images.length === 0 ? (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="text-center"><Folder className="w-12 h-12 text-white/20 mx-auto mb-2" weight="fill" /><p className="text-white/40 font-body text-sm">Select a folder</p></div>
+            </div>
+          ) : currentImg && (
+            !imgErr ? (
+              <img key={currentImg.id} src={`${API}/drive/image/${currentImg.id}`} alt={currentImg.name} className="absolute inset-0 w-full h-full object-contain slide-image bg-[#0A0A0A]" data-testid="slideshow-image" onError={() => setImgErr(true)} />
+            ) : (
+              <div className="absolute inset-0 flex items-center justify-center bg-[#111]"><p className="text-white/30 font-body">Failed to load image</p></div>
+            )
           )}
         </div>
 
-        {/* Bottom Bar: Folder Name + Controls (outside the image) */}
+        {/* Bottom bar */}
         <div className="flex-shrink-0 bg-[#0A0A0A] border-t border-[#222] flex items-center justify-between px-4 py-2" data-testid="slideshow-controls">
-          {/* Folder Name */}
           <div className="flex-1 min-w-0 mr-4">
-            <p
-              className="font-body font-medium text-white truncate"
-              data-testid="folder-name-overlay"
-              style={{ fontSize: '14px' }}
-            >
-              {currentSlide?.folderName || currentSlide?.parent_folder || currentSlide?.name || ''}
-            </p>
-            {currentSlide?.type === 'image' && (
-              <p className="font-body text-white/50 truncate" style={{ fontSize: '12px' }}>
-                {currentSlide.name}
-              </p>
-            )}
+            <p className="font-body font-medium text-white truncate" style={{ fontSize: '14px' }} data-testid="folder-name-overlay">{subfolder}</p>
+            {currentImg && <p className="font-body text-white/50 truncate" style={{ fontSize: '12px' }}>{currentImg.name}</p>}
           </div>
-
-          {/* Navigation Controls */}
           <div className="flex items-center gap-3 flex-shrink-0">
-            <Button
-              data-testid="previous-button"
-              onClick={handlePrevious}
-              variant="ghost"
-              size="icon"
-              className="rounded-sm hover:bg-white/10 h-8 w-8 text-white"
-            >
-              <CaretLeft className="w-5 h-5" weight="bold" />
+            <Button data-testid="previous-button" onClick={prev} variant="ghost" size="icon" className="rounded-sm hover:bg-white/10 h-8 w-8 text-white" disabled={images.length === 0}><CaretLeft className="w-5 h-5" weight="bold" /></Button>
+            <Button data-testid="play-pause-button" onClick={() => setIsPlaying(!isPlaying)} variant="ghost" size="icon" className="rounded-sm hover:bg-white/10 h-8 w-8 text-white" disabled={images.length === 0}>
+              {isPlaying ? <Pause className="w-5 h-5" weight="fill" /> : <Play className="w-5 h-5" weight="fill" />}
             </Button>
-
-            <Button
-              data-testid="play-pause-button"
-              onClick={() => setIsPlaying(!isPlaying)}
-              variant="ghost"
-              size="icon"
-              className="rounded-sm hover:bg-white/10 h-8 w-8 text-white"
-            >
-              {isPlaying ? (
-                <Pause className="w-5 h-5" weight="fill" />
-              ) : (
-                <Play className="w-5 h-5" weight="fill" />
-              )}
-            </Button>
-
-            <Button
-              data-testid="next-button"
-              onClick={handleNext}
-              variant="ghost"
-              size="icon"
-              className="rounded-sm hover:bg-white/10 h-8 w-8 text-white"
-            >
-              <CaretRight className="w-5 h-5" weight="bold" />
-            </Button>
-
-            <div className="h-4 w-px bg-white/20"></div>
-
-            <div className="text-xs font-body text-white/70 font-medium tabular-nums" data-testid="slide-counter">
-              {currentIndex + 1} / {allItems.length}
-            </div>
+            <Button data-testid="next-button" onClick={next} variant="ghost" size="icon" className="rounded-sm hover:bg-white/10 h-8 w-8 text-white" disabled={images.length === 0}><CaretRight className="w-5 h-5" weight="bold" /></Button>
+            <div className="h-4 w-px bg-white/20" />
+            <span className="text-xs font-body text-white/70 tabular-nums" data-testid="slide-counter">{images.length > 0 ? `${imgIdx + 1} / ${images.length}` : '0 / 0'}</span>
           </div>
         </div>
       </div>
     </div>
   );
-};
-
-function App() {
-  return (
-    <div className="App">
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<LandingPage />} />
-          <Route path="/slideshow" element={<SlideshowPage />} />
-        </Routes>
-      </BrowserRouter>
-    </div>
-  );
 }
 
-export default App;
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/slideshow" element={<SlideshowPage />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}

@@ -79,36 +79,40 @@ class DriveAPITester:
             return True
         return False
 
-    def test_public_folder_invalid_link(self):
-        """Test public folder endpoint with invalid link"""
+    def test_folder_no_session(self):
+        """Test folder endpoint without session"""
         return self.run_test(
-            "Public Folder - Invalid Link",
+            "Folder - No Session",
             "POST",
-            "drive/public/folder",
-            400,
-            data={"drive_link": "invalid_link"}
-        )
-
-    def test_public_folder_valid_format(self):
-        """Test public folder endpoint with valid format but potentially inaccessible folder"""
-        # Using a valid format but potentially inaccessible folder ID
-        test_folder_id = "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"
-        return self.run_test(
-            "Public Folder - Valid Format",
-            "POST",
-            "drive/public/folder",
-            400,  # Expecting 400 since we don't have a real public folder
-            data={"drive_link": f"https://drive.google.com/drive/folders/{test_folder_id}"}
-        )
-
-    def test_auth_folder_no_session(self):
-        """Test authenticated folder endpoint without session"""
-        return self.run_test(
-            "Auth Folder - No Session",
-            "POST",
-            "drive/auth/folder",
+            "drive/folder",
             422,  # Missing required query parameter
             data={"drive_link": "https://drive.google.com/drive/folders/test"}
+        )
+
+    def test_folder_invalid_session(self):
+        """Test folder endpoint with invalid session"""
+        return self.run_test(
+            "Folder - Invalid Session",
+            "POST",
+            "drive/folder",
+            401,  # Not authenticated
+            data={"drive_link": "https://drive.google.com/drive/folders/test"},
+            params={"session_id": "invalid_session_id"}
+        )
+
+    def test_folder_invalid_link(self):
+        """Test folder endpoint with invalid link format"""
+        if not self.session_id:
+            print("⚠️  Skipping test - no session ID available")
+            return False
+            
+        return self.run_test(
+            "Folder - Invalid Link Format",
+            "POST",
+            "drive/folder",
+            400,  # Bad request due to invalid link format
+            data={"drive_link": "invalid_link"},
+            params={"session_id": self.session_id}
         )
 
     def test_drive_status_invalid_session(self):
@@ -121,13 +125,23 @@ class DriveAPITester:
             params={"session_id": "invalid_session_id"}
         )
 
-    def test_drive_image_invalid_id(self):
-        """Test drive image endpoint with invalid file ID"""
+    def test_drive_image_no_session(self):
+        """Test drive image endpoint without session"""
         return self.run_test(
-            "Drive Image - Invalid ID",
+            "Drive Image - No Session",
             "GET",
-            "drive/image/invalid_file_id",
-            404
+            "drive/image/test_file_id",
+            422  # Missing required query parameter
+        )
+
+    def test_drive_image_invalid_session(self):
+        """Test drive image endpoint with invalid session"""
+        return self.run_test(
+            "Drive Image - Invalid Session",
+            "GET",
+            "drive/image/test_file_id",
+            401,  # Not authenticated
+            params={"session_id": "invalid_session_id"}
         )
 
     def test_drive_callback_missing_params(self):
@@ -153,16 +167,17 @@ def main():
     tester.test_root_endpoint()
     tester.test_drive_connect()
     
-    # Test public folder endpoints
-    tester.test_public_folder_invalid_link()
-    tester.test_public_folder_valid_format()
+    # Test folder endpoints (OAuth-only)
+    tester.test_folder_no_session()
+    tester.test_folder_invalid_session()
+    tester.test_folder_invalid_link()
     
-    # Test authenticated endpoints
-    tester.test_auth_folder_no_session()
+    # Test status and image endpoints
     tester.test_drive_status_invalid_session()
+    tester.test_drive_image_no_session()
+    tester.test_drive_image_invalid_session()
     
-    # Test image and callback endpoints
-    tester.test_drive_image_invalid_id()
+    # Test callback endpoint
     tester.test_drive_callback_missing_params()
 
     # Print results

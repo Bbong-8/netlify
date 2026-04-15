@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Query, Response
+from fastapi import FastAPI, APIRouter, HTTPException, Query
 from fastapi.responses import RedirectResponse, StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -80,12 +80,6 @@ def extract_folder_id(drive_link: str) -> str:
         return drive_link.strip()
     
     raise ValueError("Invalid Drive link format")
-
-
-# Helper to get Drive service (public or authenticated)
-async def get_public_drive_service():
-    """Get Drive service for public file access (no auth needed)"""
-    return build('drive', 'v3', developerKey=None)
 
 
 async def get_authenticated_drive_service(session_id: str):
@@ -276,41 +270,8 @@ async def drive_callback(code: str = Query(...), state: str = Query(...)):
         return RedirectResponse(url=f"{frontend_url}/?error=auth_failed")
 
 
-@api_router.post("/drive/public/folder")
-async def get_public_folder(request: DriveLinkRequest):
-    """Get folder structure from a public Drive link"""
-    try:
-        folder_id = extract_folder_id(request.drive_link)
-        logger.info(f"Extracting folder ID: {folder_id}")
-        
-        # Use service without credentials for public links
-        service = build('drive', 'v3', developerKey=None)
-        
-        # Get folder metadata
-        try:
-            folder = service.files().get(
-                fileId=folder_id,
-                fields='id, name'
-            ).execute()
-            folder_name = folder['name']
-        except:
-            folder_name = "Drive Folder"
-        
-        # Get all contents recursively
-        items = await get_folder_contents_recursive(service, folder_id)
-        
-        logger.info(f"Found {len(items)} items in folder")
-        return FolderStructureResponse(items=items, folder_name=folder_name)
-    
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error fetching public folder: {str(e)}")
-        raise HTTPException(status_code=400, detail=f"Error accessing folder: {str(e)}. Make sure the link is public and shared with 'Anyone with the link'.")
-
-
-@api_router.post("/drive/auth/folder")
-async def get_authenticated_folder(request: DriveLinkRequest, session_id: str = Query(...)):
+@api_router.post("/drive/folder")
+async def get_folder(request: DriveLinkRequest, session_id: str = Query(...)):
     """Get folder structure from Drive with authentication"""
     try:
         folder_id = extract_folder_id(request.drive_link)
@@ -334,18 +295,15 @@ async def get_authenticated_folder(request: DriveLinkRequest, session_id: str = 
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error fetching authenticated folder: {str(e)}")
+        logger.error(f"Error fetching folder: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Error accessing folder: {str(e)}")
 
 
 @api_router.get("/drive/image/{file_id}")
-async def get_drive_image(file_id: str, session_id: Optional[str] = Query(None)):
+async def get_drive_image(file_id: str, session_id: str = Query(...)):
     """Get image from Drive"""
     try:
-        if session_id:
-            service = await get_authenticated_drive_service(session_id)
-        else:
-            service = build('drive', 'v3', developerKey=None)
+        service = await get_authenticated_drive_service(session_id)
         
         # Get file metadata
         file_metadata = service.files().get(

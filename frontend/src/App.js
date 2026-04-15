@@ -9,7 +9,6 @@ import {
   CaretRight, 
   Folder, 
   Image as ImageIcon,
-  Link as LinkIcon,
   GoogleLogo
 } from '@phosphor-icons/react';
 import { Input } from '@/components/ui/input';
@@ -29,8 +28,6 @@ const FALLBACK_IMAGES = [
 const LandingPage = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [driveLink, setDriveLink] = useState('');
-  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     const driveConnected = searchParams.get('drive_connected');
@@ -40,7 +37,7 @@ const LandingPage = () => {
     if (driveConnected === 'true' && sessionId) {
       localStorage.setItem('drive_session_id', sessionId);
       toast.success('Google Drive connected successfully!');
-      navigate('/', { replace: true });
+      navigate('/dashboard', { replace: true });
     }
 
     if (error === 'auth_failed') {
@@ -51,36 +48,11 @@ const LandingPage = () => {
 
   const handleGoogleAuth = async () => {
     try {
-      setLoading(true);
       const response = await axios.get(`${API}/drive/connect`);
       window.location.href = response.data.authorization_url;
     } catch (error) {
       console.error('Auth error:', error);
       toast.error('Failed to initiate Google authentication');
-      setLoading(false);
-    }
-  };
-
-  const handlePublicLink = async () => {
-    if (!driveLink.trim()) {
-      toast.error('Please enter a Google Drive link');
-      return;
-    }
-
-    try {
-      setLoading(true);
-      const response = await axios.post(`${API}/drive/public/folder`, {
-        drive_link: driveLink
-      });
-
-      localStorage.setItem('folder_data', JSON.stringify(response.data));
-      localStorage.setItem('access_type', 'public');
-      navigate('/slideshow');
-    } catch (error) {
-      console.error('Folder fetch error:', error);
-      toast.error(error.response?.data?.detail || 'Failed to access folder. Make sure it\'s shared publicly.');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -99,62 +71,21 @@ const LandingPage = () => {
 
         {/* Main Card */}
         <div className="bg-[#F2F2F2] border border-[#E5E5E5] p-8 space-y-6">
-          {/* Public Link Section */}
-          <div className="space-y-3">
-            <label className="text-xs uppercase tracking-[0.2em] font-bold text-[#0A0A0A]" data-testid="public-link-label">
-              Public Drive Link
-            </label>
-            <div className="flex gap-2">
-              <Input
-                data-testid="drive-link-input"
-                type="text"
-                placeholder="https://drive.google.com/drive/folders/..."
-                value={driveLink}
-                onChange={(e) => setDriveLink(e.target.value)}
-                className="flex-1 rounded-sm border-[#E5E5E5] focus:border-[#0A0A0A] focus:ring-1 focus:ring-[#0A0A0A] font-body"
-                onKeyDown={(e) => e.key === 'Enter' && handlePublicLink()}
-              />
-              <Button
-                data-testid="load-public-button"
-                onClick={handlePublicLink}
-                disabled={loading}
-                className="bg-[#002FA7] text-white hover:bg-[#002FA7]/90 rounded-sm px-6 font-body"
-              >
-                <LinkIcon className="w-4 h-4 mr-2" weight="bold" />
-                {loading ? 'Loading...' : 'Load'}
-              </Button>
-            </div>
-            <p className="text-xs text-[#525252] font-body">
-              Paste a public Google Drive folder link to view as slideshow
-            </p>
-          </div>
-
-          {/* Divider */}
-          <div className="relative">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-[#E5E5E5]"></div>
-            </div>
-            <div className="relative flex justify-center text-xs uppercase">
-              <span className="bg-[#F2F2F2] px-2 text-[#525252] font-bold tracking-[0.2em]">Or</span>
-            </div>
-          </div>
-
           {/* Google Auth Section */}
           <div className="space-y-3">
             <label className="text-xs uppercase tracking-[0.2em] font-bold text-[#0A0A0A]" data-testid="auth-section-label">
-              Connect Google Drive
+              Connect Your Google Drive
             </label>
             <Button
               data-testid="google-auth-button"
               onClick={handleGoogleAuth}
-              disabled={loading}
-              className="w-full bg-white text-[#0A0A0A] border border-[#E5E5E5] hover:bg-[#F2F2F2] rounded-sm py-6 font-body flex items-center justify-center gap-3"
+              className="w-full bg-[#002FA7] text-white hover:bg-[#002FA7]/90 rounded-sm py-6 font-body flex items-center justify-center gap-3"
             >
               <GoogleLogo className="w-5 h-5" weight="bold" />
               <span className="font-medium">Sign in with Google</span>
             </Button>
             <p className="text-xs text-[#525252] font-body">
-              Access private folders and all your Drive content
+              Securely access your Drive folders with read-only permissions
             </p>
           </div>
         </div>
@@ -170,27 +101,155 @@ const LandingPage = () => {
   );
 };
 
+const DashboardPage = () => {
+  const navigate = useNavigate();
+  const [driveLink, setDriveLink] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [sessionId, setSessionId] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
+
+  useEffect(() => {
+    const storedSessionId = localStorage.getItem('drive_session_id');
+    if (!storedSessionId) {
+      navigate('/');
+      return;
+    }
+    setSessionId(storedSessionId);
+    checkDriveStatus(storedSessionId);
+  }, [navigate]);
+
+  const checkDriveStatus = async (sid) => {
+    try {
+      const response = await axios.get(`${API}/drive/status?session_id=${sid}`);
+      setIsConnected(response.data.connected);
+    } catch (error) {
+      console.error('Status check error:', error);
+      setIsConnected(false);
+    }
+  };
+
+  const handleLoadFolder = async () => {
+    if (!driveLink.trim()) {
+      toast.error('Please enter a Google Drive folder link');
+      return;
+    }
+
+    if (!sessionId) {
+      toast.error('Session expired. Please sign in again.');
+      navigate('/');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const response = await axios.post(
+        `${API}/drive/folder?session_id=${sessionId}`,
+        { drive_link: driveLink }
+      );
+
+      localStorage.setItem('folder_data', JSON.stringify(response.data));
+      navigate('/slideshow');
+    } catch (error) {
+      console.error('Folder fetch error:', error);
+      toast.error(error.response?.data?.detail || 'Failed to access folder. Please check the link.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSignOut = () => {
+    localStorage.removeItem('drive_session_id');
+    localStorage.removeItem('folder_data');
+    navigate('/');
+    toast.success('Signed out successfully');
+  };
+
+  return (
+    <div className="min-h-screen bg-white flex items-center justify-center p-6" data-testid="dashboard-page">
+      <div className="max-w-2xl w-full space-y-8">
+        {/* Header */}
+        <div className="text-center space-y-4">
+          <h1 className="font-heading text-4xl sm:text-5xl lg:text-6xl tracking-tighter font-black text-[#0A0A0A]" data-testid="dashboard-title">
+            Select Folder
+          </h1>
+          <p className="text-base leading-relaxed text-[#525252] max-w-xl mx-auto">
+            {isConnected ? (
+              <span className="flex items-center justify-center gap-2">
+                <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                Connected to Google Drive
+              </span>
+            ) : (
+              'Checking connection...'
+            )}
+          </p>
+        </div>
+
+        {/* Main Card */}
+        <div className="bg-[#F2F2F2] border border-[#E5E5E5] p-8 space-y-6">
+          {/* Folder Link Section */}
+          <div className="space-y-3">
+            <label className="text-xs uppercase tracking-[0.2em] font-bold text-[#0A0A0A]" data-testid="folder-link-label">
+              Drive Folder Link
+            </label>
+            <div className="flex gap-2">
+              <Input
+                data-testid="drive-link-input"
+                type="text"
+                placeholder="https://drive.google.com/drive/folders/..."
+                value={driveLink}
+                onChange={(e) => setDriveLink(e.target.value)}
+                className="flex-1 rounded-sm border-[#E5E5E5] focus:border-[#0A0A0A] focus:ring-1 focus:ring-[#0A0A0A] font-body"
+                onKeyDown={(e) => e.key === 'Enter' && handleLoadFolder()}
+              />
+              <Button
+                data-testid="load-folder-button"
+                onClick={handleLoadFolder}
+                disabled={loading}
+                className="bg-[#002FA7] text-white hover:bg-[#002FA7]/90 rounded-sm px-6 font-body"
+              >
+                {loading ? 'Loading...' : 'Load'}
+              </Button>
+            </div>
+            <p className="text-xs text-[#525252] font-body">
+              Paste any Google Drive folder link from your account
+            </p>
+          </div>
+
+          {/* Sign Out */}
+          <div className="pt-4 border-t border-[#E5E5E5]">
+            <Button
+              data-testid="sign-out-button"
+              onClick={handleSignOut}
+              variant="outline"
+              className="w-full rounded-sm font-body"
+            >
+              Sign Out
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const SlideshowPage = () => {
   const navigate = useNavigate();
   const [folderData, setFolderData] = useState(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [sessionId, setSessionId] = useState(null);
-  const [accessType, setAccessType] = useState('public');
 
   useEffect(() => {
     const storedData = localStorage.getItem('folder_data');
     const storedSessionId = localStorage.getItem('drive_session_id');
-    const storedAccessType = localStorage.getItem('access_type');
 
-    if (!storedData) {
+    if (!storedData || !storedSessionId) {
       navigate('/');
       return;
     }
 
     setFolderData(JSON.parse(storedData));
     setSessionId(storedSessionId);
-    setAccessType(storedAccessType || 'public');
   }, [navigate]);
 
   // Auto-play effect
@@ -199,7 +258,7 @@ const SlideshowPage = () => {
 
     const interval = setInterval(() => {
       handleNext();
-    }, 5000); // 5 seconds per slide
+    }, 5000);
 
     return () => clearInterval(interval);
   }, [isPlaying, currentIndex, folderData]);
@@ -272,15 +331,12 @@ const SlideshowPage = () => {
     if (item?.isEmptyFolder) {
       return FALLBACK_IMAGES[Math.floor(Math.random() * FALLBACK_IMAGES.length)];
     }
-    if (accessType === 'public' && item?.web_view_link) {
-      return item.web_view_link;
-    }
-    return `${API}/drive/image/${item?.id}${sessionId ? `?session_id=${sessionId}` : ''}`;
+    return `${API}/drive/image/${item?.id}?session_id=${sessionId}`;
   };
 
   const handleGoBack = () => {
     localStorage.removeItem('folder_data');
-    navigate('/');
+    navigate('/dashboard');
   };
 
   if (!folderData) {
@@ -348,7 +404,7 @@ const SlideshowPage = () => {
             variant="outline"
             className="w-full rounded-sm font-body"
           >
-            ← Back to Home
+            ← Back
           </Button>
         </div>
       </div>
@@ -444,6 +500,7 @@ function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<LandingPage />} />
+          <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/slideshow" element={<SlideshowPage />} />
         </Routes>
       </BrowserRouter>
